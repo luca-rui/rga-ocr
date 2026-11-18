@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-11-18
+
 ### Added
 
 - `--replace TEXT` is passed to rg when `--json` is given: the events
@@ -195,6 +199,7 @@ First public release.
   per engine with `RGA_OCR_ENGINE`; GitHub Actions matrix across macOS,
   Ubuntu and Windows.
 
-[Unreleased]: https://github.com/luca-rui/rga-ocr/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/luca-rui/rga-ocr/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/luca-rui/rga-ocr/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/luca-rui/rga-ocr/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/luca-rui/rga-ocr/releases/tag/v0.1.0
