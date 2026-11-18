@@ -27,6 +27,12 @@ All notable changes to this project are documented here. The format follows
 - The `none` cache is filled again on the first `--no-ocr` run; entries
   written by the `poppler` adapter are no longer read
   (`rga-ocr --clear-cache none` removes them).
+- Dependency floors raised to what works: `pillow>=10.1` (`pi-heif` 0.22
+  needs it, `pillow` 10.0 could not be installed next to it) and
+  `onnxruntime>=1.19` (older releases do not import with NumPy 2). CI
+  now runs one leg with the core, `rapidocr` and test dependencies at
+  their floor.
+- The `winrt` floors read `>=2.0.1`: there is no final 2.0.0 release.
 
 ## [0.1.1] - 2026-11-18
 

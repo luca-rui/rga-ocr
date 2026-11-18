@@ -155,7 +155,8 @@ def main(root):
     os.makedirs(os.path.join(root, "Ordner " + NEEDLE))
     os.makedirs(os.path.join(root, ".git", "objects"))
     os.makedirs(os.path.join(root, "node_modules", "pkg"))
-    j = lambda *p: os.path.join(root, *p)
+    def j(*p):
+        return os.path.join(root, *p)
 
     # name hits (contents are binary garbage, must not match by content)
     with open(j("Angebot_Wartungsvertrag_Kesselanlage_2026.bin"), "wb") as f:

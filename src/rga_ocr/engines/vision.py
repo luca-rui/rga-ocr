@@ -3,7 +3,7 @@
 import io
 import sys
 
-from rga_ocr.engines import Engine, module_present
+from rga_ocr.engines import Engine
 
 
 def macos_version():

@@ -11,7 +11,7 @@ own apps).
 import asyncio
 import sys
 
-from rga_ocr.engines import Engine, module_present
+from rga_ocr.engines import Engine
 
 WINRT_MODULES = ("winrt.windows.media.ocr", "winrt.windows.globalization",
                  "winrt.windows.graphics.imaging", "winrt.windows.storage.streams",
