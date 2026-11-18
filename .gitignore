@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.claude/
+.DS_Store
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+*.part
+.tessdata/
+rga-dl/
+Thumbs.db
