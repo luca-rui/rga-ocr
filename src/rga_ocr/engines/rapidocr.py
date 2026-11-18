@@ -7,9 +7,8 @@ PP-OCRv4 for Georgian) that RapidOCR fetches on first use.
 """
 
 import os
-import sys
 
-from rga_ocr.engines import Engine, module_present
+from rga_ocr.engines import Engine
 
 # Official onnxruntime wheels ship Microsoft's 1DS telemetry, on by default
 # (docs/Privacy.md): a persistent device id and trace events uploaded over

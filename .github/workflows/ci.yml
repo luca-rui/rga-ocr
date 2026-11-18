@@ -15,11 +15,24 @@ concurrency:
 env:
   RGA_VERSION_UNIX: v0.10.10
   RGA_VERSION_WINDOWS: v0.10.9   # the last release with a Windows build
+  # SHA-256 of the two release archives; change them with the versions
+  RGA_SHA256_UNIX: a969c25b182ac84aa672518313b5f741091decf7d93d03a020bcfe517b9ff4e8      # x86_64-unknown-linux-musl.tar.gz
+  RGA_SHA256_WINDOWS: da03e969ac01839443739c547ca8eb521e648e712251d61a98d34a1521b9f43b   # x86_64-pc-windows-msvc.zip
+  # tessdata_fast has no releases: a commit and the sums of the two files
+  TESSDATA_COMMIT: 87416418657359cb625c412a48b6e1d6d41c29bd
+  TESSDATA_SHA256_ENG: 7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2
+  TESSDATA_SHA256_DEU: 19d219bbb6672c869d20a9636c6816a81eb9a71796cb93ebe0cb1530e2cdb22d
   PYTHONUTF8: "1"
 
 jobs:
   test:
-    name: ${{ matrix.os }} / ${{ matrix.engine }}
+    # Required checks in the ruleset of main, by these exact names: the
+    # first seven entries of the matrix (macos-15 / vision, macos-15 /
+    # tesseract, ubuntu-latest / rapidocr, ubuntu-latest / tesseract,
+    # ubuntu-latest / auto, windows-latest / rapidocr, windows-latest /
+    # winocr) and the build job (build / sdist and wheel). Never rename
+    # them. A leg added later carries a label or a new os/engine pair.
+    name: ${{ matrix.label || format('{0} / {1}', matrix.os, matrix.engine) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -46,6 +59,29 @@ jobs:
           - os: windows-latest
             engine: winocr
             extras: winocr,test   # the en-US OCR language pack is present on windows-latest
+          # not required checks (yet): see the comment at `name`
+          - os: macos-15
+            engine: rapidocr
+            extras: rapidocr,test
+          - os: windows-latest
+            engine: tesseract
+            extras: tesseract,test
+          - os: ubuntu-latest
+            engine: tesseract
+            extras: tesseract,test
+            python: "3.11"
+            label: ubuntu-latest / tesseract / python 3.11
+          - os: ubuntu-latest
+            engine: tesseract
+            extras: tesseract,test
+            python: "3.14"
+            label: ubuntu-latest / tesseract / python 3.14
+          - os: ubuntu-latest
+            engine: rapidocr
+            extras: rapidocr,test
+            python: "3.11"          # the oldest supported Python: the floors have wheels for it
+            minimum: true           # core, rapidocr and test dependencies at the floor pyproject.toml names
+            label: ubuntu-latest / rapidocr / minimum versions
     env:
       RGA_OCR_ENGINE: ${{ matrix.engine }}
       TESSDATA_PREFIX: ${{ github.workspace }}/.tessdata
@@ -54,7 +90,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python || '3.12' }}
           cache: pip
           cache-dependency-path: pyproject.toml
 
@@ -72,7 +108,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p "$HOME/.local/bin" rga-dl
-          curl -sSL -o rga-dl/rga.tar.gz "https://github.com/phiresky/ripgrep-all/releases/download/$RGA_VERSION_UNIX/ripgrep_all-$RGA_VERSION_UNIX-x86_64-unknown-linux-musl.tar.gz"
+          python tools/fetch_verified.py "$RGA_SHA256_UNIX" rga-dl/rga.tar.gz "https://github.com/phiresky/ripgrep-all/releases/download/$RGA_VERSION_UNIX/ripgrep_all-$RGA_VERSION_UNIX-x86_64-unknown-linux-musl.tar.gz"
           tar -xzf rga-dl/rga.tar.gz -C rga-dl
           cp rga-dl/*/rga rga-dl/*/rga-preproc "$HOME/.local/bin/"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -103,8 +139,8 @@ jobs:
         shell: pwsh
         run: |
           $url = "https://github.com/phiresky/ripgrep-all/releases/download/$env:RGA_VERSION_WINDOWS/ripgrep_all-$env:RGA_VERSION_WINDOWS-x86_64-pc-windows-msvc.zip"
-          New-Item -ItemType Directory -Force -Path rga-dl | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile rga-dl\rga.zip
+          python tools/fetch_verified.py $env:RGA_SHA256_WINDOWS rga-dl\rga.zip $url
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           Expand-Archive -Path rga-dl\rga.zip -DestinationPath rga-dl -Force
           $dir = (Get-ChildItem -Path rga-dl -Directory | Select-Object -First 1).FullName
           Add-Content -Path $env:GITHUB_PATH -Value $dir
@@ -114,19 +150,29 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .tessdata
-          key: tessdata-fast-eng-deu
+          key: tessdata-fast-eng-deu-${{ env.TESSDATA_COMMIT }}
 
       - name: Fetch Tesseract language files
         if: matrix.engine == 'tesseract'
         shell: bash
         run: |
-          mkdir -p .tessdata
-          for l in eng deu; do
-            [ -f ".tessdata/$l.traineddata" ] || curl -sSL -o ".tessdata/$l.traineddata" "https://github.com/tesseract-ocr/tessdata_fast/raw/main/$l.traineddata"
-          done
+          # a file restored from the cache is checked like a fresh download
+          base="https://github.com/tesseract-ocr/tessdata_fast/raw/$TESSDATA_COMMIT"
+          python tools/fetch_verified.py "$TESSDATA_SHA256_ENG" .tessdata/eng.traineddata "$base/eng.traineddata"
+          python tools/fetch_verified.py "$TESSDATA_SHA256_DEU" .tessdata/deu.traineddata "$base/deu.traineddata"
 
       - name: Install rga-ocr
+        if: ${{ !matrix.minimum }}
         run: python -m pip install -q -e ".[${{ matrix.extras }}]"
+
+      - name: Install rga-ocr with its direct dependencies at their floor
+        if: ${{ matrix.minimum }}
+        shell: bash
+        run: |
+          python tools/min_constraints.py > constraints-min.txt
+          cat constraints-min.txt
+          python -m pip install -q -c constraints-min.txt -e ".[${{ matrix.extras }}]"
+          python -m pip list
 
       - name: Smoke test
         shell: bash
@@ -149,6 +195,23 @@ jobs:
 
       - name: Tests
         run: python -m pytest -q
+
+  lint:
+    name: lint / ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: ruff check
+        # the rule set is in pyproject.toml; the version is pinned so a new
+        # ruff cannot turn the job red on its own
+        run: |
+          python -m pip install -q ruff==0.17.5
+          ruff check .
 
   build:
     name: build / sdist and wheel

@@ -838,7 +838,9 @@ class Printer:
             return text
         out, last = [], 0
         for s, e in spans:
-            out.append(text[last:s]); out.append(self.c("1;31", text[s:e])); last = e
+            out.append(text[last:s])
+            out.append(self.c("1;31", text[s:e]))
+            last = e
         out.append(text[last:])
         return "".join(out)
 

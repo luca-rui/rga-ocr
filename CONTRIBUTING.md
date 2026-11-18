@@ -65,6 +65,28 @@ sdist. The licence check reads the licence each distribution declares in
 its metadata and accepts only names on its allow-list, which holds no GPL
 or AGPL; it does not inspect files inside the wheels.
 
+Further legs run beside these: macOS with rapidocr, Windows with
+tesseract, Ubuntu with tesseract on Python 3.11 and 3.14, and one Ubuntu
+leg that installs the core, `rapidocr` and test dependencies at the floor
+`pyproject.toml` names (`tools/min_constraints.py` writes the constraints
+file). When you raise or add one of those, that leg tells you whether the
+floor holds. The floors of `tesserocr`, the pyobjc packages and the winrt
+packages are not tested, and neither are transitive dependencies, which
+pip picks freely. The ripgrep-all archives, and in the tesseract legs the
+Tesseract language files, are fetched through `tools/fetch_verified.py`,
+which checks their SHA-256; the sums sit at the top of `ci.yml` next to
+the versions. The `auto` leg is the exception: it lets `rga-ocr setup
+--apply` and the test suite fetch the language files the way a user
+would, without a pinned sum.
+
+`lint / ruff` runs `ruff check .` with the rules named in
+`pyproject.toml`. Locally: `pipx run ruff==0.17.5 check .`
+
+The job names of the seven legs named first and of the build job are
+required checks on `main`. Do
+not rename them: a pull request whose check has another name waits for
+the old one forever.
+
 ## Releases
 
 `.github/workflows/release.yml` publishes through PyPI trusted publishing;

@@ -3,7 +3,7 @@ are fetched separately into the tool's data directory or TESSDATA_PREFIX)."""
 
 import os
 
-from rga_ocr.engines import Engine, module_present
+from rga_ocr.engines import Engine
 
 # BCP 47 primary subtag -> Tesseract traineddata name (ISO 639-2/T)
 LANG_CODES = {
