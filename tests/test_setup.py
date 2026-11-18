@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -462,6 +463,90 @@ def test_check_rga_config_writes_to_the_given_file(tmp_path, monkeypatch):
     assert open(cfg + ".bak", encoding="utf-8").read() == CFG_WITH_COMMENT
     stamped = [n for n in os.listdir(str(tmp_path / "rga")) if re.fullmatch(r"config\.jsonc\.\d{8}-\d{6}\.bak", n)]
     assert len(stamped) == 1, os.listdir(str(tmp_path / "rga"))
+
+
+def test_check_rga_config_creates_the_file_and_then_leaves_it_alone(tmp_path):
+    cfg = str(tmp_path / "new" / "config.jsonc")
+    out = sc.Out()
+    assert sc.check_rga_config(out, apply=True, rga_config=cfg) is True
+    written = open(cfg, encoding="utf-8").read()
+    assert [a["name"] for a in json.loads(written)["custom_adapters"]] == list(NAMES["adapters"].values())
+    assert os.listdir(os.path.dirname(cfg)) == ["config.jsonc"]          # nothing to back up
+
+    # a second run finds nothing to do: no write, no backup, with or without --apply
+    for apply in (False, True):
+        out = sc.Out()
+        assert sc.check_rga_config(out, apply=apply, rga_config=cfg) is True
+        assert "up to date" in out.lines and not out.todos
+    assert open(cfg, encoding="utf-8").read() == written
+    assert os.listdir(os.path.dirname(cfg)) == ["config.jsonc"]
+
+
+def test_check_rga_config_leaves_a_file_it_cannot_parse(tmp_path):
+    cfg = str(tmp_path / "config.jsonc")
+    broken = '{"custom_adapters": [\n'
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write(broken)
+    out = sc.Out()
+    assert sc.check_rga_config(out, apply=True, rga_config=cfg) is False
+    assert any(line.startswith(f"cannot parse {cfg}: ") for line in out.lines), out.lines
+    assert open(cfg, encoding="utf-8").read() == broken
+    assert os.listdir(str(tmp_path)) == ["config.jsonc"]
+
+
+LISTING = """Adapters:
+
+ - **ocrpdf**
+     rga-ocr pdf adapter
+ - **ocrimg**
+     rga-ocr image adapter
+ - **officexml**
+     rga-ocr office adapter
+ - **pandoc**
+     Uses pandoc to convert binary/unreadable text documents to plain markdown-like text
+"""
+
+
+def test_verify_runs_rga_only_with_apply(tmp_path, monkeypatch):
+    cfg = str(tmp_path / "config.jsonc")
+    ran = []
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd)
+        return SimpleNamespace(returncode=0, stdout=fake_run.stdout, stderr="")
+
+    monkeypatch.setattr(sc.subprocess, "run", fake_run)
+
+    # no rga: nothing to verify with
+    monkeypatch.setattr(sc.shutil, "which", lambda name: None)
+    out = sc.Out()
+    assert sc.verify(out, apply=True, rga_config=cfg) is False
+    assert out.lines == ["rga not on PATH; skipped"] and not ran
+
+    monkeypatch.setattr(sc.shutil, "which", lambda name: "/usr/bin/" + name)
+    # dry run: prints the command, runs nothing
+    out = sc.Out()
+    assert sc.verify(out, apply=False, rga_config=cfg) is True
+    assert out.lines[0].startswith(f"rga --rga-config-file={cfg} --rga-list-adapters") and not ran
+
+    # --apply: rga lists the three adapters
+    fake_run.stdout = LISTING
+    out = sc.Out()
+    assert sc.verify(out, apply=True, rga_config=cfg) is True
+    assert ran == [["rga", f"--rga-config-file={cfg}", "--rga-list-adapters"]]
+    assert out.lines == ["rga lists " + ", ".join(NAMES["adapters"].values())]
+
+    # --apply: one adapter is not listed
+    fake_run.stdout = LISTING.replace(" - **ocrimg**", " - **other**")
+    out = sc.Out()
+    assert sc.verify(out, apply=True, rga_config=cfg) is False
+    assert out.lines == [f"rga does not list ocrimg; inspect {cfg}"]
+
+    # without --rga-config-file the command carries no config flag
+    del ran[:]
+    fake_run.stdout = LISTING
+    assert sc.verify(sc.Out(), apply=True) is True
+    assert ran == [["rga", "--rga-list-adapters"]]
 
 
 def test_setup_honours_rga_config_file_flag(cli, tmp_path):

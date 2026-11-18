@@ -7,17 +7,16 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
 
 import pytest
 
-from conftest import IS_WINDOWS, NAMES, NEEDLE, cache_tag, engine_name, grep, rel
+from conftest import (HERE, IS_WINDOWS, NAMES, NEEDLE, Tool, cache_tag, clean_err, engine_name, grep, rel,
+                      spy_config)
 
 P = NAMES["prog"]
 E = NAMES["env_prefix"]
-WARM_BUDGET = 3.0 if IS_WINDOWS else 1.5
-
-
 def cache_id(name):
     return hashlib.sha1(name.encode()).hexdigest()[:7]
 
@@ -47,6 +46,14 @@ def test_cold_run(tool):
     assert grep(out, "^" + rel("vertrag.docx") + ":"), out
     assert grep(out, "^" + rel("tabelle.xlsx") + r":[0-9]+:Page 1:.*Wartungsvertrag Kesselanlage"), out
     assert grep(out, "^" + rel("deck.pptx") + r":[0-9]+:Page 2:.*Wartungsvertrag Kesselanlage"), out
+    assert grep(out, "^" + rel("tabelle.ods") + r":[0-9]+:Page 1:.*Wartungsvertrag Kesselanlage West"), out
+    assert grep(out, "^" + rel("deck.odp") + r":[0-9]+:Page 2:.*Wartungsvertrag Kesselanlage"), out
+    assert not grep(out, "^" + rel("deck.odp") + r":[0-9]+:Page 1:"), out
+    for ext in ("tif", "tiff", "webp", "gif", "bmp"):
+        if os.path.isfile(os.path.join(tool.fx, "formats", "photo." + ext)):
+            assert grep(out, "^" + rel("formats", "photo." + ext) + ":"), out
+        else:
+            assert ext == "webp", f"fixture formats/photo.{ext} was not written"
     assert grep(out, "^" + rel("bundle.zip") + r":[0-9]+:needle\.jpg: .*Wartungsvertrag Kesselanlage"), out
     # snippet window
     assert grep(out, "^" + rel("deck.pptx") + r":[0-9]+:Page 3: …[^…]*Wartungsvertrag Kesselanlage[^…]*…$"), out
@@ -58,18 +65,60 @@ def test_cold_run(tool):
     assert not grep(out, r"decoy\.png"), out
     assert not grep(out, r"decoy\.pdf"), out
     assert not grep(out, "^" + rel("Angebot") + r"[^:]*\.bin:"), out
-    assert r.err == "", r.err
+    assert clean_err(r), r.err
 
 
-def test_warm_run(tool):
-    tool.search()
-    t0 = time.perf_counter()
-    r = tool.search()
-    dt = time.perf_counter() - t0
-    print(f"warm: {dt:.2f}s exit {r.code}")
-    assert r.code == 0
-    assert grep(r.out, "^" + rel("sub", "scan.pdf") + ":"), r.out
-    assert dt < WARM_BUDGET, f"warm run took {dt:.2f}s"
+def test_warm_run(tool, tmp_path):
+    """A second run over the same files starts no adapter: every answer
+    comes from the cache. Seen through a spy in front of the adapter, on
+    one file per adapter and one archive member, with a cache of its own."""
+    t = Tool(str(tmp_path / "warm"))
+    os.makedirs(t.fx)
+    for name in ("photo.png", "tabelle.xlsx", "bundle.zip", os.path.join("sub", "scan.pdf")):
+        shutil.copy(os.path.join(tool.fx, name), t.fx)
+    with open(t.rga_config, "w", encoding="utf-8") as f:
+        json.dump(spy_config(), f, indent=2)
+    log = os.path.join(t.root, "adapter-calls")
+    env = {"ADAPTER_SPY_LOG": log}
+
+    def calls():
+        try:
+            with open(log, encoding="utf-8") as f:
+                return [line.split("\t", 1) for line in f.read().splitlines()]
+        except FileNotFoundError:
+            return []
+
+    cold = t.search(env=env)
+    assert cold.code == 0, cold.err
+    first = calls()
+    assert sorted(mode for mode, _ in first) == ["image", "image", "office", "pdf"], first
+    assert any(path.endswith("scan.pdf") for _, path in first), first
+
+    warm = t.search(env=env)
+    assert warm.code == 0, warm.err
+    # rg prints files in the order its threads finish them
+    assert sorted(warm.out.splitlines()) == sorted(cold.out.splitlines())
+    assert calls() == first, "the warm run started adapters: %r" % calls()[len(first):]
+    assert clean_err(warm), warm.err
+
+
+def test_rapidocr_reads_a_non_latin_script(tool, tmp_path):
+    """`--lang ru` routes to the Cyrillic model, which rapidocr fetches on
+    first use; the default model reads no Cyrillic. The sample is a tracked
+    PNG, Pillow's bundled font has no Cyrillic glyphs to draw one with."""
+    if engine_name() != "rapidocr":
+        pytest.skip("rapidocr only: the other engines pick their script from the language packs installed")
+    d = tmp_path / "ru"
+    d.mkdir()
+    shutil.copy(os.path.join(HERE, "data", "cyrillic.png"), str(d))
+    # --no-cache: no rapidocr-cyrillic directory in the cache the other tests list
+    r = tool.run("--lang", "ru", "--no-cache", "обслуживание", str(d), cwd=str(tmp_path))
+    if r.code != 0 and re.search(r"(?i)download|urlopen|urlerror|connection|timed? ?out|getaddrinfo|"
+                                 r"name resolution|max retries|ssl", r.err):
+        pytest.skip("Cyrillic model not fetched: " + r.err.strip().splitlines()[-1])
+    assert r.code == 0, (r.out, r.err)
+    assert grep(r.out, r"cyrillic\.png:1:Договор на обслуживание"), r.out
+    assert clean_err(r), r.err
 
 
 # ------------------------------------------------------------- snippets

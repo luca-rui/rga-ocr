@@ -46,6 +46,17 @@ def png_bytes(img):
     return buf.getvalue()
 
 
+def image_bytes(img, fmt):
+    """The image in another container (TIFF, WEBP, GIF, BMP), or None when
+    this Pillow build cannot write it."""
+    buf = io.BytesIO()
+    try:
+        img.save(buf, fmt)
+    except (KeyError, OSError):
+        return None
+    return buf.getvalue()
+
+
 def jpeg_bytes(img, orientation=None):
     """JPEG with the pixels as given and, optionally, an EXIF orientation tag."""
     buf = io.BytesIO()
@@ -199,6 +210,14 @@ def main(root):
     rotated = text_image(NEEDLE + "\ngedreht aufgenommen", rotate=90)
     with open(j("rotated.jpg"), "wb") as f:
         f.write(jpeg_bytes(rotated, orientation=6))
+    # the other containers the image adapter is registered for, same pixels
+    # as photo.png (webp is skipped when Pillow was built without it)
+    os.makedirs(j("formats"))
+    for ext, fmt in (("tif", "TIFF"), ("tiff", "TIFF"), ("webp", "WEBP"), ("gif", "GIF"), ("bmp", "BMP")):
+        data = image_bytes(photo, fmt)
+        if data is not None:
+            with open(j("formats", "photo." + ext), "wb") as f:
+                f.write(data)
     # heic (skipped when neither sips nor the tracked sample is available)
     write_heic(png_photo, j("shot.heic"))
     # decoys
@@ -236,6 +255,35 @@ def main(root):
         "ppt/slides/slide2.xml": slide.format("Status " + NEEDLE),
         # slide 3: the needle sits deep inside a long paragraph (snippet window test)
         "ppt/slides/slide3.xml": slide.format(FILLER * 3 + "Anhang " + NEEDLE + " Ost. " + FILLER * 3),
+    })
+    # OpenDocument: the adapter reads content.xml only. ods: one page; odp:
+    # one page per draw:page, the needle on the second
+    odf = ('<?xml version="1.0" encoding="UTF-8"?><office:document-content'
+           ' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
+           ' xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"'
+           ' xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"'
+           ' xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body>{}</office:body></office:document-content>')
+    manifest = ('<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">'
+                '<manifest:file-entry manifest:full-path="/" manifest:media-type="{}"/>'
+                '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>')
+    cell = '<table:table-cell><text:p>{}</text:p></table:table-cell>'
+    ods = "application/vnd.oasis.opendocument.spreadsheet"
+    zip_doc(j("tabelle.ods"), {
+        "mimetype": ods,
+        "META-INF/manifest.xml": manifest.format(ods),
+        "content.xml": odf.format(
+            '<office:spreadsheet><table:table table:name="Blatt1">'
+            '<table:table-row>' + cell.format("Position") + cell.format("Betrag") + '</table:table-row>'
+            '<table:table-row>' + cell.format(NEEDLE + " West") + cell.format("1500") + '</table:table-row>'
+            '</table:table></office:spreadsheet>'),
+    })
+    page = '<draw:page draw:name="{}"><draw:frame><draw:text-box><text:p>{}</text:p></draw:text-box></draw:frame></draw:page>'
+    odp = "application/vnd.oasis.opendocument.presentation"
+    zip_doc(j("deck.odp"), {
+        "mimetype": odp,
+        "META-INF/manifest.xml": manifest.format(odp),
+        "content.xml": odf.format('<office:presentation>' + page.format("Folie1", "Agenda")
+                                  + page.format("Folie2", "Status " + NEEDLE) + '</office:presentation>'),
     })
     # archive with an image inside
     with open(j("photo.jpg"), "rb") as f:

@@ -74,6 +74,25 @@ def grep(text, pattern):
 Result = namedtuple("Result", "code out err")
 
 
+def clean_err(r):
+    """True when stderr holds nothing the program itself complained about:
+    no line of its own (`rga-ocr: ...`), no traceback, no error line from
+    rga or rg. Anything else on stderr (a library's notice, a download
+    progress line) is not this suite's business."""
+    return not re.search(r"(?im)^(?:%s:|Traceback \(most recent call last\)|error\b)"
+                         % re.escape(NAMES["prog"]), r.err)
+
+
+def spy_config():
+    """The suite's rga config with every adapter behind tests/spy_adapter.py,
+    which logs each call to the file named by ADAPTER_SPY_LOG."""
+    cfg = rga_config()
+    spy = os.path.join(HERE, "spy_adapter.py")
+    for a in cfg["custom_adapters"]:
+        a["args"] = ["-I", "-X", "utf8", spy] + a["args"][-2:]
+    return cfg
+
+
 IMAGE_EXT = ["jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "webp", "gif", "bmp"]
 IMAGE_MIME = ["image/jpeg", "image/png", "image/heic", "image/heif", "image/tiff",
               "image/webp", "image/gif", "image/bmp"]
@@ -166,8 +185,19 @@ def ensure_tessdata(tmp_root):
     d = os.path.join(tmp_root, "tessdata")
     os.makedirs(d, exist_ok=True)
     for code in TESSDATA_LANGS:
-        urllib.request.urlretrieve(t.DOWNLOAD_BASE + code + ".traineddata",
-                                   os.path.join(d, code + ".traineddata"))
+        url = t.DOWNLOAD_BASE + code + ".traineddata"
+        try:
+            # URLError and timeouts are OSErrors; urlretrieve has no timeout
+            with urllib.request.urlopen(url, timeout=60) as resp, \
+                    open(os.path.join(d, code + ".traineddata"), "wb") as f:
+                shutil.copyfileobj(resp, f)
+        except OSError as e:
+            reason = f"tesseract language file {code} not here and not fetched from {url}: {e}"
+            if os.environ.get("CI"):
+                # a CI leg that ran nothing must not be green
+                pytest.fail(reason, pytrace=False)
+            pytest.skip(reason + "; set TESSDATA_PREFIX to a directory that holds "
+                        + ", ".join(c + ".traineddata" for c in TESSDATA_LANGS))
     os.environ["TESSDATA_PREFIX"] = d
 
 
