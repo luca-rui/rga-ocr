@@ -110,6 +110,11 @@ per engine and language, so switching engines never serves stale text.
    `--rga-config-file=PATH` before `setup` targets another rga config.
    Exit status: 0 ready, 1 something to do, 2 usage error.
 
+   `setup` also names the ripgrep-all release it found. One older than
+   the tested release (0.10.10, on Windows 0.10.9) gets a warning, not an
+   error. `rga-preproc` has to be on PATH next to `rga`. In an
+   environment made by `uv tool install`, the install hints use `uv tool`.
+
 `rga-ocr --init-config` writes a commented profile.
 
 ### Upgrading
@@ -128,19 +133,22 @@ get fresh text.
 ### Uninstalling
 
 ```
-pipx uninstall rga-ocr
+rga-ocr setup --remove      # takes the three adapters out of rga's config
+pipx uninstall rga-ocr      # or uv tool uninstall rga-ocr
 ```
 
-Then remove the three `custom_adapters` entries (`ocrpdf`, `ocrimg`,
-`officexml`) from rga's `config.jsonc`, and delete the cache, profile and
-Tesseract language directories; the paths are in the table under
-"Profile and paths".
+`setup --remove` keeps a backup copy of rga's `config.jsonc`, as `--apply`
+does, and leaves every other custom adapter in it. It deletes nothing
+else: it prints the commands that remove the cache, the profile and the
+Tesseract language files, for you to run. Run the cache command
+(`rga-ocr --clear-cache all`) before you uninstall the package.
 
 ## Usage
 
 ```
 rga-ocr [options] QUERY [PATH]        PATH defaults to .
 rga-ocr [--rga-config-file=F] setup [--apply] [--engine NAME] [--lang L] [--config PATH]
+rga-ocr [--rga-config-file=F] setup --remove [--config PATH]
 rga-ocr --version | -h | --help
 
   -s / -i                case-sensitive / case-insensitive (default -i)

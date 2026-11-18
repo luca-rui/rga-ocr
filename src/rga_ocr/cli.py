@@ -119,6 +119,7 @@ progress = true
 USAGE = f"""\
 usage: {PROG} [options] QUERY [PATH]        PATH defaults to .
        {PROG} [--rga-config-file=F] setup [--apply] [--engine NAME] [--lang L] [--config PATH]
+       {PROG} [--rga-config-file=F] setup --remove [--config PATH]
 
   -s / -i                case-sensitive / case-insensitive (default -i)
   -r                     QUERY is a regex (default literal)

@@ -12,6 +12,16 @@ All notable changes to this project are documented here. The format follows
   carry the replacement.
 - `--rga-cache-path DIR` and the other `--rga-` value flags work with a
   separate value; `rga-ocr` hands them to rga in the `=` form rga needs.
+- `rga-ocr setup --remove` takes the three adapters out of rga's config,
+  with the same backup copy as `--apply`, and prints the commands that
+  delete the cache, the profile, the Tesseract language files and the
+  package. It runs none of them. The cache command is `rga-ocr
+  --clear-cache all`, which deletes cache directories only, whatever
+  `cache_dir` points at.
+- `rga-ocr setup` prints the ripgrep-all release it found and warns when
+  it is older than the tested one (0.10.10, on Windows 0.10.9).
+- In an environment made by `uv tool install`, the install hints read
+  `uv tool install --force "rga-ocr[...]"`.
 
 ### Changed
 
@@ -58,6 +68,13 @@ All notable changes to this project are documented here. The format follows
   <name>` removes one.
 - An engine plugin whose name holds anything but `a-z`, `0-9` and `_` is
   ignored with a warning; its cache directory name could not be read back.
+- `rga-ocr setup` checks that `rga-preproc` is on PATH and exits 1 when
+  it is missing. rga starts it for every file.
+- `rga-ocr --rga-config-file= setup` with an empty path exits 2. It used
+  to fall back to rga's default config, which `--apply` then rewrote.
+- On Windows the pip command in the install hints starts with the bare
+  interpreter path, or with `&` when the path needs quotes, so it runs in
+  PowerShell.
 
 ### Fixed
 
@@ -76,6 +93,8 @@ All notable changes to this project are documented here. The format follows
   `--engines` accepted such a name and the search refused it.
 - `rga-ocr setup` no longer removes a `,` before `}` or `]` inside a
   string of rga's config.
+- Two config backups written in the same second no longer share a file
+  name.
 
 ## [0.1.1] - 2026-11-18
 
