@@ -84,7 +84,7 @@ jobs:
           # choco exits 0 even when its feed fails for one package (seen
           # 2026-11-18: 504 for poppler), so check what is installed and
           # retry once
-          $pkgs = 'ripgrep', 'pandoc', 'poppler'
+          $pkgs = 'ripgrep', 'pandoc'
           foreach ($attempt in 1..2) {
             choco install -y --no-progress @pkgs
             $have = choco list --limit-output | ForEach-Object { ($_ -split '\|')[0] }
