@@ -55,6 +55,11 @@ def test_adapter_list_adds_ffmpeg_only_when_configured():
     assert "ffmpeg" not in cli.adapter_list(o, {"adapters_extra": ""})
     assert cli.adapter_list(o, {"adapters_extra": "ffmpeg"})[-1] == "ffmpeg"
     assert cli.adapter_list({"ocr": False, "mail": True}, {"adapters_extra": ""})[-1] == "mail"
+    # --no-ocr: PDFs stay with our adapter (text layer only), no image
+    # adapter, and never rga's poppler adapter, which needs pdftotext
+    lst = cli.adapter_list({"ocr": False, "mail": False}, {"adapters_extra": ""})
+    assert lst[:2] == ["ocrpdf", "officexml"]
+    assert "ocrimg" not in lst and "poppler" not in lst
     # no duplicates when adapters_extra repeats a base adapter
     lst = cli.adapter_list(o, {"adapters_extra": "zip, ffmpeg"})
     assert lst.count("zip") == 1 and lst[-1] == "ffmpeg"

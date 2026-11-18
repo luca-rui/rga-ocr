@@ -49,8 +49,7 @@ config. Exit status: 0 ready, 1 something to do, 2 usage error.
 """
 
 REQUIRED_TOOLS = ("rga", "rg", "pandoc")
-OPTIONAL_TOOLS = {"pdftotext": "--no-ocr (PDF text layer through poppler)",
-                  "ffmpeg": "the ffmpeg adapter (adapters_extra = ffmpeg)"}
+OPTIONAL_TOOLS = {"ffmpeg": "the ffmpeg adapter (adapters_extra = ffmpeg)"}
 
 
 # --- tools -----------------------------------------------------------------
@@ -88,19 +87,19 @@ def install_commands(missing, pm):
     want_rga = "rga" in missing
     others = missing - {"rga"}
     pkg = {
-        "brew": {"rg": "ripgrep", "pandoc": "pandoc", "pdftotext": "poppler", "ffmpeg": "ffmpeg", "rga": "ripgrep-all"},
-        "apt-get": {"rg": "ripgrep", "pandoc": "pandoc", "pdftotext": "poppler-utils", "ffmpeg": "ffmpeg"},
-        "dnf": {"rg": "ripgrep", "pandoc": "pandoc", "pdftotext": "poppler-utils", "ffmpeg": "ffmpeg"},
-        "zypper": {"rg": "ripgrep", "pandoc": "pandoc", "pdftotext": "poppler-tools", "ffmpeg": "ffmpeg"},
-        "pacman": {"rg": "ripgrep", "pandoc": "pandoc-cli", "pdftotext": "poppler", "ffmpeg": "ffmpeg", "rga": "ripgrep-all"},
-        "choco": {"rg": "ripgrep", "pandoc": "pandoc", "pdftotext": "poppler", "ffmpeg": "ffmpeg", "rga": "ripgrep-all"},
+        "brew": {"rg": "ripgrep", "pandoc": "pandoc", "ffmpeg": "ffmpeg", "rga": "ripgrep-all"},
+        "apt-get": {"rg": "ripgrep", "pandoc": "pandoc", "ffmpeg": "ffmpeg"},
+        "dnf": {"rg": "ripgrep", "pandoc": "pandoc", "ffmpeg": "ffmpeg"},
+        "zypper": {"rg": "ripgrep", "pandoc": "pandoc", "ffmpeg": "ffmpeg"},
+        "pacman": {"rg": "ripgrep", "pandoc": "pandoc-cli", "ffmpeg": "ffmpeg", "rga": "ripgrep-all"},
+        "choco": {"rg": "ripgrep", "pandoc": "pandoc", "ffmpeg": "ffmpeg", "rga": "ripgrep-all"},
         "winget": {"rg": "BurntSushi.ripgrep.MSVC", "pandoc": "JohnMacFarlane.Pandoc", "ffmpeg": "Gyan.FFmpeg"},
     }
     cmds = []
     if pm == "scoop":
         # the rga manifest depends on ripgrep, pandoc, poppler and ffmpeg
-        names = ["rga"] if want_rga else sorted({"rg": "ripgrep", "pandoc": "pandoc", "pdftotext": "poppler",
-                                                 "ffmpeg": "ffmpeg"}[t] for t in others)
+        names = ["rga"] if want_rga else sorted({"rg": "ripgrep", "pandoc": "pandoc", "ffmpeg": "ffmpeg"}[t]
+                                                for t in others)
         if names:
             cmds.append("scoop install " + " ".join(names))
         return cmds

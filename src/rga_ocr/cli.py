@@ -40,7 +40,8 @@ DEFAULTS = {
 NAME_BLANK_MODES = ("nonletter", "separators", "strict")
 BASE_ADAPTERS = ["pandoc", "postprocpagebreaks", "zip", "decompress", "tar", "sqlite"]
 OCR_ADAPTERS = ["ocrpdf", "ocrimg", "officexml"]
-NO_OCR_ADAPTERS = ["poppler", "officexml"]
+# --no-ocr: ocrpdf runs with RGA_OCR_NO_OCR=1 (text layer only), no image adapter
+NO_OCR_ADAPTERS = ["ocrpdf", "officexml"]
 
 # rg output-format options: the content pass reads rg's JSON events, and
 # these flags replace or silence that stream, so they are refused up front
@@ -118,7 +119,7 @@ usage: {PROG} [options] QUERY [PATH]        PATH defaults to .
   --engine NAME          OCR engine: auto, vision, winocr, rapidocr, tesseract (default auto)
   --engines              list the engines, whether each works here, and what auto picks; exit
   --lang L               OCR languages, e.g. de-DE,en-US (default: the engine decides)
-  --no-ocr               PDFs via poppler text layer only, images skipped
+  --no-ocr               PDF text layer only, images skipped
   --force-ocr            OCR every PDF page even if it has a text layer
   --mail                 also search .eml/.mbox
   --accurate             sniff mime types instead of trusting extensions
@@ -732,9 +733,10 @@ class Status:
     FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     ASCII_FRAMES = "|/-\\"
 
-    def __init__(self, report, root):
+    def __init__(self, report, root, verb="OCR'd"):
         self.report = report
         self.root = root
+        self.verb = verb            # what the adapters did to a finished file
         self.utf8 = (getattr(sys.stderr, "encoding", "") or "").lower().replace("-", "") == "utf8"
         self.frames = self.FRAMES if self.utf8 else self.ASCII_FRAMES
         enable_vt(sys.stderr)
@@ -785,7 +787,7 @@ class Status:
 
     def _counts(self):
         return [f"{self.hits} hit" + ("" if self.hits == 1 else "s"),
-                f"{self.done} file" + ("" if self.done == 1 else "s") + " OCR'd"]
+                f"{self.done} file" + ("" if self.done == 1 else "s") + " " + self.verb]
 
     def _draw(self):
         cols = shutil.get_terminal_size((80, 24)).columns
@@ -858,7 +860,8 @@ class Printer:
 
 
 def adapter_list(o, st):
-    """The rga adapters for this run: OCR or poppler for PDFs, the base set,
+    """The rga adapters for this run: the PDF and office adapters, plus the
+    image adapter unless --no-ocr, the base set,
     `mail` with --mail, and whatever `adapters_extra` names (ffmpeg is never
     added on its own; it costs a process per media file)."""
     adapters = list(OCR_ADAPTERS if o["ocr"] else NO_OCR_ADAPTERS) + BASE_ADAPTERS
@@ -914,10 +917,13 @@ def run_contents(o, st, printer, root, query):
             env[ENV_PREFIX + "LANG"] = ",".join(langs)
         if engine:
             env[ENV_PREFIX + "ENGINE"] = engine.name
-        if o["force"]:
-            env[ENV_PREFIX + "FORCE_OCR"] = "1"
-        else:
-            env.pop(ENV_PREFIX + "FORCE_OCR", None)
+        # set or removed on every run: a value inherited from the caller's
+        # environment would fill this run's cache with the other mode's text
+        for name, on in (("FORCE_OCR", o["ocr"] and o["force"]), ("NO_OCR", not o["ocr"])):
+            if on:
+                env[ENV_PREFIX + name] = "1"
+            else:
+                env.pop(ENV_PREFIX + name, None)
         # rg discards a preprocessor's stderr when it exits 0, so the adapters
         # report progress and errors through a file instead
         report_path = os.path.join(run_dir, "report")
@@ -926,7 +932,8 @@ def run_contents(o, st, printer, root, query):
 
         hits = False
         width = st["snippet_int"]
-        live = Status(Report(report_path), root) if status_line else None
+        verb = "OCR'd" if o["ocr"] else "read"
+        live = Status(Report(report_path), root, verb) if status_line else None
         printer.status = live
         errbuf = []
 

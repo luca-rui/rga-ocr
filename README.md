@@ -72,12 +72,10 @@ per engine and language, so switching engines never serves stale text.
 
    | | |
    |-|-|
-   | macOS | `brew install ripgrep ripgrep-all pandoc poppler` |
-   | Debian/Ubuntu | `sudo apt-get install ripgrep pandoc poppler-utils` plus `rga` and `rga-preproc` from the [v0.10.10 release archive](https://github.com/phiresky/ripgrep-all/releases/tag/v0.10.10) on PATH |
-   | Arch | `sudo pacman -S ripgrep ripgrep-all pandoc-cli poppler` |
+   | macOS | `brew install ripgrep ripgrep-all pandoc` |
+   | Debian/Ubuntu | `sudo apt-get install ripgrep pandoc` plus `rga` and `rga-preproc` from the [v0.10.10 release archive](https://github.com/phiresky/ripgrep-all/releases/tag/v0.10.10) on PATH |
+   | Arch | `sudo pacman -S ripgrep ripgrep-all pandoc-cli` |
    | Windows | `scoop install rga` (pulls ripgrep, pandoc, poppler, ffmpeg) or `choco install ripgrep-all ripgrep pandoc` |
-
-   poppler's `pdftotext` serves `--no-ocr` and is optional.
 
 2. Install `rga-ocr` with the engine extra you want, with
    [pipx](https://pipx.pypa.io) or in a venv. Python 3.11 to 3.14 (pi-heif
@@ -154,7 +152,7 @@ rga-ocr --version | -h | --help
   --engine NAME          OCR engine: auto, vision, winocr, rapidocr, tesseract (default auto)
   --engines              list the engines, whether each works here, and what auto picks; exit
   --lang L               OCR languages, e.g. de-DE,en-US (default: the engine decides)
-  --no-ocr               PDFs via poppler text layer only, images skipped
+  --no-ocr               PDF text layer only, images skipped
   --force-ocr            OCR every PDF page even if it has a text layer
   --mail                 also search .eml/.mbox
   --accurate             sniff mime types instead of trusting extensions
@@ -308,7 +306,7 @@ paragraph grouping is shared; how aggressively lines are joined still
 depends on the boxes an engine reports. `rga-ocr` resolves `auto` once per
 run and hands the engine name and languages to the adapters as
 `RGA_OCR_ENGINE` and `RGA_OCR_LANG`. `--force-ocr` sets
-`RGA_OCR_FORCE_OCR=1`.
+`RGA_OCR_FORCE_OCR=1`, `--no-ocr` sets `RGA_OCR_NO_OCR=1`.
 
 ## The OCR cache
 
@@ -374,10 +372,10 @@ and under a second afterwards.
 - `--force-ocr` is needed for PDFs with a wrong text layer (a scan that
   got a garbage OCR layer elsewhere): the adapter trusts any page with 20
   or more characters.
-- `--no-ocr` reads PDFs with `pdftotext`, which keeps the layout line
-  breaks, so a phrase wrapped across two lines does not match there. The
-  `ocrpdf` adapter joins the lines of a paragraph, so the same phrase
-  matches in the default mode.
+- `--no-ocr` reads the PDF text layer and nothing else: pages without one
+  (scans) and images are not searched. It uses the `ocrpdf` adapter, so
+  it needs `rga-ocr setup --apply` like the default mode, and no
+  `pdftotext`.
 - Multi-word matches across OCR lines rely on the paragraph grouping. Text
   spread over columns or tables may still split a phrase across output lines.
 - Files larger than rga's cache blob limit are re-processed on every run
@@ -389,7 +387,9 @@ and under a second afterwards.
   adapter fail with "No cache?". `rga-ocr --no-cache` works around it
   with a throwaway cache directory per run. Set `RGA_OCR_ENGINE` and
   `RGA_OCR_LANG` yourself in that case; the adapters do not read the
-  profile.
+  profile. Give `RGA_OCR_FORCE_OCR=1` and `RGA_OCR_NO_OCR=1` runs their
+  own `--rga-cache-path`: rga's cache key does not include the
+  environment, so one mode would read back the other's text.
 - Windows: ripgrep-all's last release with a Windows build is v0.10.9; its
   custom adapters work the same way.
 - rga reports its own config and usage errors with exit 1, the same as "no
@@ -476,8 +476,8 @@ decoding, language mappings, cache clearing, argument errors and the rga
 config merge; they run without the toolchain. The end-to-end tests need
 `rga`, `rg`, `pandoc` on PATH; Vision
 needs a GUI session; the tesseract leg fetches `eng` and `deu` into its
-temp root when no tessdata is present. The `--no-ocr` test is skipped
-without `pdftotext`. GitHub Actions runs the matrix in the table above.
+temp root when no tessdata is present. GitHub Actions runs the matrix in
+the table above.
 
 ## Reporting bugs
 
@@ -507,7 +507,7 @@ tests/data/shot.heic        HEIC sample for platforms without an encoder
 tests/ptyrun.py             runs a command on a pseudo-terminal for the tty tests
 tools/check_licences.py     CI check: no GPL/AGPL dependency, every licence on the allow-list
 docs/design/glossary.md     the terms used in the code and in this file
-tools/check_tools.py        CI check: pdftotext, rga's poppler and pandoc adapters extract text
+tools/check_tools.py        CI check: the tools are on PATH and rga's pandoc adapter extracts text
 ```
 
 ## Dependencies and licences
@@ -540,8 +540,7 @@ but if a GPL library in the process matters to you, use the `vision`,
 [pandoc](https://pandoc.org) (GPL-2.0-or-later) are separate programs that
 you install and that `rga-ocr` starts as subprocesses; nothing of them is
 linked or bundled, so they do not change `rga-ocr`'s licence. ripgrep
-(MIT or Unlicense) and poppler (GPL-2.0 or GPL-3.0) are the same kind of
-external program.
+(MIT or Unlicense) is the same kind of external program.
 
 ## Network access
 

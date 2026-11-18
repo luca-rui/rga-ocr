@@ -14,6 +14,8 @@ Environment (set by rga-ocr from the profile, flags, or directly):
   RGA_OCR_LANG            comma separated OCR languages, BCP 47 (de-DE,en-US);
                           unset or empty: the engine's default / auto-detection
   RGA_OCR_FORCE_OCR       "1": OCR every PDF page and append to the text layer
+  RGA_OCR_NO_OCR          "1": PDF text layer only, no page is rendered or
+                          OCR'd; wins over RGA_OCR_FORCE_OCR
   RGA_OCR_MIN_TEXT_CHARS  PDF page with fewer text-layer chars is OCR'd (20)
   RGA_OCR_RENDER_DPI      PDF render resolution for OCR (200)
   RGA_OCR_MAX_PIXELS      longest image side handed to the OCR engine (3000)
@@ -163,14 +165,15 @@ def _text_layer(page):
 
 def mode_pdf(data):
     import pypdfium2
-    force = os.environ.get(ENV_PREFIX + "FORCE_OCR") == "1"
+    no_ocr = os.environ.get(ENV_PREFIX + "NO_OCR") == "1"
+    force = not no_ocr and os.environ.get(ENV_PREFIX + "FORCE_OCR") == "1"
     ocr = None
     pages = []
     doc = pypdfium2.PdfDocument(data)
     try:
         for page in doc:
             layer = _text_layer(page)
-            if force or len(layer.replace(" ", "")) < MIN_TEXT_CHARS:
+            if not no_ocr and (force or len(layer.replace(" ", "")) < MIN_TEXT_CHARS):
                 if ocr is None:
                     ocr = OCR()
                 scale = min(RENDER_DPI / 72, MAX_PIXELS / max(page.get_size()))

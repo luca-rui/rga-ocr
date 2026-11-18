@@ -124,6 +124,24 @@ def test_rapidocr_module_opts_out_of_onnxruntime_telemetry(monkeypatch):
     assert os.environ["ORT_DISABLE_TELEMETRY"] == "0"
 
 
+def test_pdf_no_ocr_reads_the_text_layer_and_never_starts_an_engine(fixtures, monkeypatch):
+    def no_engine():
+        raise AssertionError("OCR engine constructed")
+    monkeypatch.setattr(adapter, "OCR", no_engine)
+    monkeypatch.setenv("RGA_OCR_NO_OCR", "1")
+    monkeypatch.setenv("RGA_OCR_FORCE_OCR", "1")      # NO_OCR wins
+    with open(os.path.join(fixtures, "textlayer.pdf"), "rb") as f:
+        pages = adapter.mode_pdf(f.read()).split(adapter.PAGE_BREAK)
+    assert len(pages) == 2
+    assert "Wartungsvertrag Kesselanlage" in pages[1]
+    with open(os.path.join(fixtures, "sub", "scan.pdf"), "rb") as f:
+        assert adapter.mode_pdf(f.read()).strip() == ""
+    monkeypatch.delenv("RGA_OCR_NO_OCR")
+    monkeypatch.delenv("RGA_OCR_FORCE_OCR")
+    with open(os.path.join(fixtures, "sub", "scan.pdf"), "rb") as f, pytest.raises(AssertionError):
+        adapter.mode_pdf(f.read())
+
+
 def test_adapter_process_exits_zero_on_unknown_mode():
     r = subprocess.run([sys.executable, "-m", "rga_ocr.adapter", "nope", "x"],
                        input=b"data", capture_output=True, timeout=60)

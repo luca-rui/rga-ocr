@@ -58,15 +58,15 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install ripgrep, ripgrep-all, pandoc, poppler (macOS)
+      - name: Install ripgrep, ripgrep-all, pandoc (macOS)
         if: runner.os == 'macOS'
-        run: brew install ripgrep ripgrep-all pandoc poppler
+        run: brew install ripgrep ripgrep-all pandoc
 
-      - name: Install ripgrep, pandoc, poppler (Linux)
+      - name: Install ripgrep, pandoc (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q ripgrep pandoc poppler-utils
+          sudo apt-get install -y -q ripgrep pandoc
 
       - name: Install ripgrep-all from its release archive (Linux)
         if: runner.os == 'Linux'
@@ -77,14 +77,14 @@ jobs:
           cp rga-dl/*/rga rga-dl/*/rga-preproc "$HOME/.local/bin/"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Install ripgrep, pandoc, poppler (Windows)
+      - name: Install ripgrep, pandoc (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           # choco exits 0 even when its feed fails for one package (seen
-          # 2026-11-18: 504 for poppler), so check what is installed and
+          # 2026-11-18: 504 for one of them), so check what is installed and
           # retry once
-          $pkgs = 'ripgrep', 'pandoc', 'poppler'
+          $pkgs = 'ripgrep', 'pandoc'
           foreach ($attempt in 1..2) {
             choco install -y --no-progress @pkgs
             $have = choco list --limit-output | ForEach-Object { ($_ -split '\|')[0] }
@@ -143,8 +143,8 @@ jobs:
           rga --rga-list-adapters | sed -n '1,8p'   # sed drains stdin; head would SIGPIPE rga
 
       - name: The installed tools extract text
-        # default shell, the same as the tests: Git Bash on Windows would
-        # resolve the pdftotext that Git ships instead of poppler's
+        # default shell, the same as the tests, so both resolve the same
+        # binaries
         run: python tools/check_tools.py
 
       - name: Tests
