@@ -20,8 +20,10 @@ Engine protocol (subclass Engine, module attribute ENGINE = the class):
   recognize(img)             -> list of (top, x, height, text), all but text
                              normalised to 0..1 from the image's top-left
 
-Third-party engines register under the entry-point group "rga_ocr.engines";
-the entry point loads to the Engine subclass.
+Other packages can register an engine under the entry-point group
+"rga_ocr.engines" (the entry point loads to the Engine subclass). The hook
+is experimental: the protocol above is not a stable interface yet and may
+change in any release.
 """
 
 import importlib

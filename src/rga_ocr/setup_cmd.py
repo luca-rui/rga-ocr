@@ -19,7 +19,6 @@ import sys
 
 from rga_ocr import ENV_PREFIX, LEGACY_ENV_PREFIX, LEGACY_PROG, PROG, engines, paths
 
-REPO_URL = "https://github.com/luca-rui/rga-ocr"
 RGA_RELEASES = "https://github.com/phiresky/ripgrep-all/releases/download"
 
 ADAPTER_MODULE = "rga_ocr.adapter"
@@ -149,7 +148,7 @@ def under_pipx():
 
 
 def extra_install_command(extra):
-    spec = f"{PROG}[{extra}] @ git+{REPO_URL}"
+    spec = f"{PROG}[{extra}]"
     if under_pipx():
         return f'pipx install --force "{spec}"'
     return f'"{sys.executable}" -m pip install "{spec}"'

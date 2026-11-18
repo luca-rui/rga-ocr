@@ -37,7 +37,7 @@ folder takes a fraction of a second.
 Quick start, once `rga`, `rg` and `pandoc` are installed (see Install):
 
 ```
-pipx install "rga-ocr[vision] @ git+https://github.com/luca-rui/rga-ocr"   # or [winocr], [rapidocr], [tesseract]
+pipx install "rga-ocr[vision]"   # or [winocr], [rapidocr], [tesseract]
 rga-ocr setup --apply
 rga-ocr "maintenance contract" ~/Documents
 ```
@@ -64,8 +64,6 @@ pi-heif ships no wheels for Python 3.15 yet. Where `python3` is 3.15, add
 does not, and which `auto` picks. `--engine NAME`, the profile key
 `engine`, or `RGA_OCR_ENGINE` choose one explicitly. Results are cached
 per engine and language, so switching engines never serves stale text.
-Third-party engines can register under the entry-point group
-`rga_ocr.engines`.
 
 ## Install
 
@@ -87,7 +85,7 @@ Third-party engines can register under the entry-point group
    picks an interpreter).
 
    ```
-   pipx install "rga-ocr[rapidocr] @ git+https://github.com/luca-rui/rga-ocr"
+   pipx install "rga-ocr[rapidocr]"
    ```
 
    macOS: `rga-ocr[vision]`; Windows: `rga-ocr[winocr]`; several extras
