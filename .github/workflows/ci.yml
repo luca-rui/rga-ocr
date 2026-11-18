@@ -164,7 +164,7 @@ jobs:
         run: |
           python -m pip install -q build twine
           python -m build
-          twine check dist/*
+          twine check --strict dist/*
 
       - name: Install the wheel into a clean venv
         run: |
@@ -180,6 +180,25 @@ jobs:
             echo "copyleft package found in the clean install" >&2
             exit 1
           fi
+
+      - name: Every dependency, extras included, is permissively licensed
+        run: |
+          python -m venv /tmp/extras
+          /tmp/extras/bin/pip install -q "$(ls dist/*.whl)[rapidocr,tesseract]"
+          python -m pip install -q pip-licenses
+          pip-licenses --python /tmp/extras/bin/python --format=csv | tee /tmp/licences.csv
+          python tools/check_licences.py < /tmp/licences.csv
+
+      - name: The sdist carries the tests and they pass from it
+        run: |
+          mkdir /tmp/sdist
+          tar -xzf dist/*.tar.gz -C /tmp/sdist --strip-components=1
+          test -f /tmp/sdist/tests/conftest.py
+          test -f /tmp/sdist/tests/make_fixtures.py
+          test -f /tmp/sdist/tests/data/shot.heic
+          /tmp/clean/bin/pip install -q "pytest>=8"
+          cd /tmp/sdist
+          /tmp/clean/bin/python -m pytest -q tests/test_adapter.py tests/test_cli.py tests/test_setup.py
 
       - name: The pdf adapter extracts a text layer without an engine
         run: |

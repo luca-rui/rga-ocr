@@ -58,7 +58,34 @@ GitHub Actions runs the suite on macOS (vision, tesseract), Ubuntu
 (rapidocr, tesseract, and an `auto` leg that relies on `setup --apply`)
 and Windows (rapidocr, winocr), plus a build job that checks the sdist and
 wheel, installs the wheel into a clean venv and verifies that neither
-PyMuPDF nor pillow-heif comes along.
+PyMuPDF nor pillow-heif comes along. The build job also runs
+`tools/check_licences.py` over an install with the `rapidocr` and
+`tesseract` extras on Linux and runs the unit tests from the unpacked
+sdist. The licence check reads the licence each distribution declares in
+its metadata and accepts only names on its allow-list, which holds no GPL
+or AGPL; it does not inspect files inside the wheels.
+
+## Releases
+
+`.github/workflows/release.yml` publishes through PyPI trusted publishing;
+the repository holds no API token.
+
+1. Dry run: start the workflow by hand ("Run workflow") on a branch whose
+   `VERSION` in `src/rga_ocr/__init__.py` is a pre-release such as
+   `0.2.0rc1`. It uploads to TestPyPI only. Install from there into a clean
+   venv:
+   `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ rga-ocr==0.2.0rc1`.
+2. Set `VERSION`, move the `[Unreleased]` entries in `CHANGELOG.md` under
+   the new version, merge.
+3. Tag the merge commit on `main` as `vX.Y.Z` and push the tag. The
+   workflow refuses a tag that differs from `VERSION` or points at a commit
+   that is not on `main`, then uploads to PyPI. Tags and PyPI versions are
+   immutable: a wrong release is fixed by the next version.
+4. Create the GitHub release from the tag with the changelog section.
+
+Repeat the dry run after any change to `release.yml`, including a
+Dependabot update of the actions it uses: CI does not exercise that
+workflow.
 
 ## Style
 

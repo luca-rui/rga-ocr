@@ -6,7 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- The sdist carries the test suite and the fixture builder, so
+  `python -m pytest` works from an unpacked source archive.
+- A release workflow that publishes to PyPI through trusted publishing.
+- CI checks the declared licence of every dependency, extras included,
+  against an allow-list without GPL or AGPL.
+
+### Changed
+
+- The quick start names the Python 3.15 workaround (`--python python3.14`).
 
 ## [0.1.0] - 2026-11-18
 

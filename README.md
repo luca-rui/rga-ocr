@@ -42,6 +42,9 @@ rga-ocr setup --apply
 rga-ocr "maintenance contract" ~/Documents
 ```
 
+pi-heif ships no wheels for Python 3.15 yet. Where `python3` is 3.15, add
+`--python python3.14` (any of 3.11 to 3.14) to the `pipx install` line.
+
 ## Platforms and engines
 
 | platform | engines (in the order `auto` tries them) | tested in CI |
@@ -504,6 +507,7 @@ tests/test_setup.py         unit tests: JSONC parsing, config merge, install com
 tests/make_fixtures.py      builds the fixture tree (PDFs written by hand, images drawn with Pillow)
 tests/data/shot.heic        HEIC sample for platforms without an encoder
 tests/ptyrun.py             runs a command on a pseudo-terminal for the tty tests
+tools/check_licences.py     CI check: no GPL/AGPL dependency, every licence on the allow-list
 docs/design/glossary.md     the terms used in the code and in this file
 tools/check_tools.py        CI check: pdftotext, rga's poppler and pandoc adapters extract text
 ```
