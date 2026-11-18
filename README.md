@@ -505,6 +505,7 @@ tests/make_fixtures.py      builds the fixture tree (PDFs written by hand, image
 tests/data/shot.heic        HEIC sample for platforms without an encoder
 tests/ptyrun.py             runs a command on a pseudo-terminal for the tty tests
 docs/design/glossary.md     the terms used in the code and in this file
+tools/check_tools.py        CI check: pdftotext, rga's poppler and pandoc adapters extract text
 ```
 
 ## Dependencies and licences
