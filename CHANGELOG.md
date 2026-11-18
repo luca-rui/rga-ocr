@@ -6,8 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.1] - 2026-11-18
+
 ### Added
 
+- `rga-ocr` is on PyPI: `pipx install "rga-ocr[vision]"`. The README and the
+  install hints of `rga-ocr setup` use the PyPI name instead of the git URL.
 - The sdist carries the test suite and the fixture builder, so
   `python -m pytest` works from an unpacked source archive.
 - A release workflow that publishes to PyPI through trusted publishing.
@@ -17,6 +23,9 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - The quick start names the Python 3.15 workaround (`--python python3.14`).
+- The `rga_ocr.engines` entry-point hook stays in the code but is
+  experimental and no longer advertised: the engine protocol is not a
+  stable interface yet.
 
 ## [0.1.0] - 2026-11-18
 
@@ -90,5 +99,6 @@ First public release.
   per engine with `RGA_OCR_ENGINE`; GitHub Actions matrix across macOS,
   Ubuntu and Windows.
 
-[Unreleased]: https://github.com/luca-rui/rga-ocr/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/luca-rui/rga-ocr/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/luca-rui/rga-ocr/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/luca-rui/rga-ocr/releases/tag/v0.1.0

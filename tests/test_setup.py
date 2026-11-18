@@ -84,6 +84,13 @@ def test_install_commands_fall_back_to_the_release_archive(monkeypatch):
     assert sc.rga_download_url().endswith("x86_64-pc-windows-msvc.zip")
 
 
+def test_extra_install_command_names_the_pypi_package(monkeypatch):
+    monkeypatch.setattr(sc, "under_pipx", lambda: True)
+    assert sc.extra_install_command("rapidocr") == 'pipx install --force "rga-ocr[rapidocr]"'
+    monkeypatch.setattr(sc, "under_pipx", lambda: False)
+    assert sc.extra_install_command("vision") == f'"{sys.executable}" -m pip install "rga-ocr[vision]"'
+
+
 def test_setup_help_and_bad_flag(cli):
     r = cli.run("setup", "--help", cwd=cli.root)
     assert r.code == 0 and "usage: rga-ocr [--rga-config-file=F] setup [--apply]" in r.out
