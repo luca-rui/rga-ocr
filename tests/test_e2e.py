@@ -438,6 +438,27 @@ def test_engines(tool):
     r = tool.run("--engine", "bogus", NEEDLE, ".")
     assert r.code == 2, (r.out, r.err)
     assert "unknown engine 'bogus'" in r.err, r.err
+    # the exit code of --engines answers "does my configured engine work here"
+    r = tool.run("--engines", "--engine", "bogus")
+    assert r.code == 1, (r.out, r.err)
+    assert grep(r.out, r"^configured: bogus \(NOT available\)$"), r.out
     r = tool.run("--engine", "bogus", "--no-ocr", "Kesselanlage", ".")
     assert r.code in (0, 1), r.err                                  # no engine needed
     assert "unknown engine" not in r.err
+    # blanks around a name mean the same to --engines and to the search
+    r = tool.run("--engines", env={"RGA_OCR_ENGINE": " bogus "})
+    assert r.code == 1 and grep(r.out, r"^configured: bogus \(NOT available\)$"), (r.out, r.err)
+    r = tool.run(NEEDLE, ".", env={"RGA_OCR_ENGINE": " bogus "})
+    assert r.code == 2 and "unknown engine 'bogus'" in r.err, r.err
+
+
+def test_misspelt_environment_variable_gets_one_warning(tool):
+    # the CLI warns once per run; the adapter never does (it does not
+    # import the CLI, and rg drops a preprocessor's stderr anyway)
+    r = tool.run(NEEDLE, ".", env={"RGA_OCR_LANGUAGE": "de-DE"})
+    assert r.code == 0, r.err
+    assert grep(r.out, "^" + rel("textlayer.pdf") + ":"), r.out
+    assert r.err.count("RGA_OCR_LANGUAGE ignored: no such setting") == 1, r.err
+    assert len(r.err.strip().splitlines()) == 1, r.err
+    r = tool.run("setup", "--help", env={"RGA_OCR_LANGUAGE": "de-DE"})
+    assert r.err.count("RGA_OCR_LANGUAGE ignored: no such setting") == 1, r.err

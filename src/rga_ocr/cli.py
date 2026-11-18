@@ -67,7 +67,8 @@ VALOPTS = set("""
 PREFIX_RE = re.compile(r"^(?:Page \d+: )?(?:[^\s:/]+\.[A-Za-z0-9]{1,8}: )*")
 
 TEMPLATE = f"""\
-# {PROG} profile.  key = value, one per line, '#' starts a comment.
+# {PROG} profile.  key = value, one per line. '#' starts a comment at the
+# start of a line or after a blank; inside a value it is kept (dir#1).
 # Every key can also be set as {ENV_PREFIX}<KEY> in the environment, most as a
 # flag. Precedence: built-in default < this file < environment < flag.
 
@@ -76,7 +77,8 @@ TEMPLATE = f"""\
 # Windows, otherwise rapidocr, then tesseract. --engines lists them.
 engine = auto
 
-# OCR languages, comma separated BCP 47 tags (de-DE,en-US). Empty: the
+# OCR languages, BCP 47 tags separated by commas or blanks (de-DE,en-US).
+# Empty: the
 # engine's default; vision and winocr detect the language themselves.
 lang =
 
@@ -101,7 +103,8 @@ name_blank_optional = false
 snippet = 80
 
 # Where OCR results are cached, one sub-directory per engine and language.
-cache_dir = {DEFAULTS['cache_dir']}
+# The line below shows the default; remove the '#' to set another directory.
+# cache_dir = {DEFAULTS['cache_dir']}
 
 # Extra ripgrep-all adapters appended to the list, e.g. mail,ffmpeg
 adapters_extra =
@@ -125,7 +128,9 @@ usage: {PROG} [options] QUERY [PATH]        PATH defaults to .
   --name-blank-optional  the run a blank matches may be empty
   --engine NAME          OCR engine: auto, vision, winocr, rapidocr, tesseract (default auto)
   --engines              list the engines, whether each works here, and what auto picks; exit
-  --lang L               OCR languages, e.g. de-DE,en-US (default: the engine decides)
+                         (exit code 1 when the configured engine, or with auto every
+                         engine, does not work here)
+  --lang L               OCR languages, e.g. de-DE,en-US or "de-DE en-US" (default: the engine decides)
   --no-ocr               PDF text layer only, images skipped
   --force-ocr            OCR every PDF page even if it has a text layer
   --mail                 also search .eml/.mbox
@@ -168,13 +173,18 @@ def config_path(explicit=None):
     return paths.profile_path()
 
 
+# "#" opens a comment at the start of a line or after whitespace only, so a
+# value such as "scans#2024" survives
+COMMENT_RE = re.compile(r"(?:^|\s)#")
+
+
 def load_profile(path):
     vals = {}
     if not os.path.isfile(path):
         return vals
     with open(path, encoding="utf-8") as f:
         for n, raw in enumerate(f, 1):
-            line = raw.split("#", 1)[0].strip()
+            line = COMMENT_RE.split(raw, maxsplit=1)[0].strip()
             if not line:
                 continue
             if "=" not in line:
@@ -196,7 +206,35 @@ def settings_from(profile_path):
         v = os.environ.get(ENV_PREFIX + k.upper())
         if v is not None:
             s[k] = v
+    s["engine"] = s["engine"].strip()
     return s
+
+
+# {ENV_PREFIX}<NAME> variables that are not profile keys: the profile path
+# and what the CLI hands to the adapter or the adapter reads on its own.
+# tests/test_cli.py checks this list against the source.
+INTERNAL_ENV = ("CONFIG", "FORCE_OCR", "NO_OCR", "REPORT",
+                "MIN_TEXT_CHARS", "RENDER_DPI", "MAX_PIXELS", "PARAGRAPH_GAP")
+
+
+def unknown_env(environ=None):
+    """Names in the environment that start with ENV_PREFIX and mean nothing."""
+    known = {ENV_PREFIX + k.upper() for k in DEFAULTS} | {ENV_PREFIX + k for k in INTERNAL_ENV}
+    environ = os.environ if environ is None else environ
+    return sorted(k for k in environ if k.startswith(ENV_PREFIX) and k not in known)
+
+
+def environment_hints():
+    """One warning each for misspelt variables and for engine plugins whose
+    name cannot be used. Printed by the CLI only; the adapter runs per file."""
+    odd = unknown_env()
+    if odd:
+        warn(f"{', '.join(odd)} ignored: no such setting "
+             f"(settings: {', '.join(ENV_PREFIX + k.upper() for k in DEFAULTS)})")
+    bad = engines.rejected_plugins()
+    if bad:
+        warn(f"engine plugin {', '.join(repr(n) for n in bad)} ignored: "
+             "an engine name may contain a-z, 0-9 and _ only")
 
 
 def as_list(value):
@@ -467,14 +505,19 @@ def clear_cache(cache_dir, targets=(), dry_run=False):
 
 
 def print_engines(st):
-    """One row per engine: name, usable here, note (reason or 'auto')."""
+    """One row per engine: name, usable here, note (reason or 'auto').
+    Returns 1 when the configured engine, or for auto every engine, is unusable."""
     rows = [list(r) for r in engines.table(engines.parse_langs(st["lang"]))]
     print_table(["ENGINE", "AVAILABLE", "NOTE"], rows)
-    chosen = st["engine"]
-    if chosen != "auto":
+    chosen = st["engine"].strip() or "auto"       # --engine " x " comes in unstripped
+    if chosen == "auto":
+        ok = any(r[2] == "auto" for r in rows)
+        if not ok:
+            print("\nconfigured: auto (no engine available)")
+    else:
         ok = any(r[0] == chosen and r[1] == "yes" for r in rows)
         print(f"\nconfigured: {chosen} ({'available' if ok else 'NOT available'})")
-    return 0
+    return 0 if ok else 1
 
 
 def init_config(path):
@@ -1060,11 +1103,13 @@ def main(argv=None):
         i = argv.index("setup")
         if all(a.startswith("--rga-") for a in argv[:i]):
             from rga_ocr import setup_cmd
+            environment_hints()          # setup acts on the same settings
             return setup_cmd.main(argv[i + 1:], config_path, settings_from,
                                   rga_config=rga_config_flag(argv[:i]))
     o = parse_args(argv)
     cfg = config_path(o["config"])
     legacy_hints(o, cfg)
+    environment_hints()
     if o["init"]:
         return init_config(cfg)
     st = settings_from(cfg)

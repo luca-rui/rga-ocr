@@ -224,3 +224,103 @@ def test_bundled_short_flags_cannot_smuggle_refused_ones(argv, word, capsys):
 def test_bundles_and_attached_values_that_are_fine_pass_through():
     for arg in ("-C2", "-j4", "-gr*.txt", "-tr", "-UP", "-M300"):      # an r or l inside a value is no flag
         assert cli.parse_args([arg, "q"])["pass"] == [arg], arg
+
+
+# ------------------------------------------- profile, environment, engines
+
+def test_profile_hash_starts_a_comment_only_after_a_blank(tmp_path):
+    p = tmp_path / "config"
+    p.write_text("# a full line\n"
+                 "  # an indented one\n"
+                 "exclude = build#2, .git   # trailing\n"
+                 "engine = tesseract\t# after a tab\n"
+                 "lang = de-DE#x\n", encoding="utf-8")
+    assert cli.load_profile(str(p)) == {"exclude": "build#2, .git", "engine": "tesseract", "lang": "de-DE#x"}
+
+
+def test_init_config_leaves_cache_dir_to_the_default(tmp_path):
+    p = str(tmp_path / "sub" / "config")
+    assert cli.init_config(p) == 0
+    vals = cli.load_profile(p)
+    assert "cache_dir" not in vals
+    assert vals["engine"] == "auto"
+    with open(p, encoding="utf-8") as f:
+        assert grep(f.read(), r"^# cache_dir = ")
+    assert cli.settings_from(p)["cache_dir"] == cli.DEFAULTS["cache_dir"]
+
+
+def test_lang_takes_commas_and_blanks():
+    from rga_ocr import engines
+    for value in ("de-DE,en-US", "de-DE en-US", " de-DE ,  en-US\t", "de-DE\nen-US"):
+        assert engines.parse_langs(value) == ["de-DE", "en-US"], value
+    assert engines.parse_langs("") == [] and engines.parse_langs(None) == []
+    assert cli.as_list("my dir, other") == ["my dir", "other"]      # exclude stays comma-only
+
+
+def test_unknown_environment_variables_are_named_once(monkeypatch, capsys):
+    env = {"RGA_OCR_LANGUAGE": "de", "RGA_OCR_ENGINE": "auto", "RGA_OCR_NO_OCR": "1",
+           "RGA_OCR_CACHE_DIR": "/x", "RGA_OCR_RENDER_DPI": "150", "RGA_OCRX": "1", "PATH": "/bin"}
+    assert cli.unknown_env(env) == ["RGA_OCR_LANGUAGE"]
+    for k in [k for k in os.environ if k.startswith("RGA_OCR_")]:
+        monkeypatch.delenv(k)
+    cli.environment_hints()
+    assert capsys.readouterr().err == ""
+    monkeypatch.setenv("RGA_OCR_LANGUAGE", "de")
+    monkeypatch.setenv("RGA_OCR_ENGIN", "vision")
+    cli.environment_hints()
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "RGA_OCR_ENGIN, RGA_OCR_LANGUAGE ignored" in err, err
+
+
+def test_every_variable_the_source_reads_is_known():
+    """INTERNAL_ENV is a hand-kept list; a variable the code starts reading
+    without an entry there would be reported to the user as a typo."""
+    src = os.path.dirname(cli.__file__)
+    read = set()
+    for dirpath, _, files in os.walk(src):
+        for fn in files:
+            if fn.endswith(".py"):
+                with open(os.path.join(dirpath, fn), encoding="utf-8") as f:
+                    text = f.read()
+                read |= set(re.findall(r'ENV_PREFIX \+ "([A-Z_]+)"', text))
+                read |= set(re.findall(r'_env_num\("([A-Z_]+)"', text))
+    assert {"REPORT", "ENGINE", "MIN_TEXT_CHARS"} <= read          # the scan finds something
+    known = {k.upper() for k in cli.DEFAULTS} | set(cli.INTERNAL_ENV)
+    assert read <= known, sorted(read - known)
+
+
+class FakeEntryPoint:
+    def __init__(self, name):
+        self.name = name
+
+
+def test_engine_plugins_with_unusable_names_are_left_out(monkeypatch, capsys):
+    from rga_ocr import engines
+    eps = [FakeEntryPoint(n) for n in ("good_one", "my-engine", "Upper", "x2")]
+    monkeypatch.setattr(engines, "_entry_points", lambda: eps)
+    assert sorted(engines._external()) == ["good_one", "x2"]
+    assert engines.rejected_plugins() == ["Upper", "my-engine"]
+    assert "my-engine" not in engines.names() and "good_one" in engines.names()
+    for k in [k for k in os.environ if k.startswith("RGA_OCR_")]:
+        monkeypatch.delenv(k)
+    cli.environment_hints()
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "'Upper', 'my-engine' ignored" in err, err
+
+
+@pytest.mark.parametrize("rows, engine, code, line", [
+    ([("vision", "yes", "auto"), ("tesseract", "no", "why")], "auto", 0, None),
+    ([("vision", "yes", "auto"), ("tesseract", "no", "why")], "vision", 0, "configured: vision (available)"),
+    ([("vision", "yes", "auto"), ("tesseract", "no", "why")], "tesseract", 1, "configured: tesseract (NOT available)"),
+    ([("vision", "yes", "auto"), ("tesseract", "no", "why")], "bogus", 1, "configured: bogus (NOT available)"),
+    ([("vision", "no", "why"), ("tesseract", "no", "why")], "auto", 1, "configured: auto (no engine available)"),
+    ([("vision", "yes", "auto")], "", 0, None),
+])
+def test_engines_exit_code_says_whether_the_configured_engine_works(monkeypatch, capsys, rows, engine, code, line):
+    from rga_ocr import engines
+    monkeypatch.setattr(engines, "table", lambda langs: rows)
+    assert cli.print_engines({"engine": engine, "lang": ""}) == code
+    out = capsys.readouterr().out
+    assert ("configured:" in out) == (line is not None), out
+    if line:
+        assert line in out, out

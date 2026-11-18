@@ -276,9 +276,21 @@ def load_jsonc(text):
             j = text.find("*/", i)
             i = n if j < 0 else j + 2
         else:
+            if c in "}]":
+                # a trailing comma: the last thing before the bracket, blanks
+                # aside, with a value in front of it ("[,]" stays an error).
+                # Strings are whole chunks, so a "," inside one is safe.
+                k = len(out) - 1
+                while k >= 0 and out[k].isspace():
+                    k -= 1
+                j = k - 1
+                while j >= 0 and out[j].isspace():
+                    j -= 1
+                if k >= 0 and out[k] == "," and j >= 0 and out[j] not in ("[", "{", ","):
+                    del out[k]
             out.append(c)
             i += 1
-    stripped = re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+    stripped = "".join(out)
     return json.loads(stripped) if stripped.strip() else {}
 
 

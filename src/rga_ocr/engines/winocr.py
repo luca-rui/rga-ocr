@@ -11,7 +11,7 @@ own apps).
 import asyncio
 import sys
 
-from rga_ocr.engines import Engine
+from rga_ocr.engines import Engine, sanitize
 
 WINRT_MODULES = ("winrt.windows.media.ocr", "winrt.windows.globalization",
                  "winrt.windows.graphics.imaging", "winrt.windows.storage.streams",
@@ -75,6 +75,19 @@ class WinOcrEngine(Engine):
             return False, (f"no OCR language pack for {', '.join(langs)} (installed: {', '.join(installed)}); "
                            f"run as administrator: {capability_command(langs[0])}")
         return True, ""
+
+    @classmethod
+    def lang_tag(cls, langs):
+        """The pack that will do the work: "de,en" with only en-US installed
+        is cached as en-US, so a pack installed later gets its own cache."""
+        if langs:
+            try:
+                tag = match_language(langs, _installed())
+            except Exception:  # noqa: BLE001 - no WinRT here: the requested tags name the cache
+                tag = None
+            if tag:
+                return sanitize(tag)
+        return super().lang_tag(langs)
 
     def __init__(self, langs):
         super().__init__(langs)

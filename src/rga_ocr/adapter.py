@@ -11,7 +11,8 @@ Modes (argv[1]); argv[2] is the virtual path, for progress reports only:
 Environment (set by rga-ocr from the profile, flags, or directly):
   RGA_OCR_ENGINE          OCR engine name (vision, winocr, rapidocr, tesseract,
                           or a registered one); unset: the platform's auto pick
-  RGA_OCR_LANG            comma separated OCR languages, BCP 47 (de-DE,en-US);
+  RGA_OCR_LANG            OCR languages, BCP 47, separated by commas or blanks
+                          (de-DE,en-US);
                           unset or empty: the engine's default / auto-detection
   RGA_OCR_FORCE_OCR       "1": OCR every PDF page and append to the text layer
   RGA_OCR_NO_OCR          "1": PDF text layer only, no page is rendered or

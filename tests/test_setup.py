@@ -37,6 +37,16 @@ def test_load_jsonc_strips_comments_and_trailing_commas():
     assert sc.load_jsonc("// only a comment\n") == {}
 
 
+def test_load_jsonc_trailing_commas_only_outside_strings():
+    assert sc.load_jsonc('{"a": ",}", "b": [",]", ", ]"]}') == {"a": ",}", "b": [",]", ", ]"]}
+    assert sc.load_jsonc('{"a": [1, 2, // last\n ], /* done */ }') == {"a": [1, 2]}
+    assert sc.load_jsonc('{"a": {"b": [[1,],],},}') == {"a": {"b": [[1]]}}
+    assert sc.load_jsonc('{"a": "x\\\\",}') == {"a": "x\\"}
+    for bad in ("[1,,]", "[,]", '{"a": 1,, }'):
+        with pytest.raises(ValueError):
+            sc.load_jsonc(bad)
+
+
 def test_merge_keeps_foreign_entries_and_drops_legacy_ones():
     cfg = sc.load_jsonc(JSONC)
     merged = sc.merge_config(cfg, sc.adapter_entries())

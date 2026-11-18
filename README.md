@@ -151,7 +151,9 @@ rga-ocr --version | -h | --help
   --name-blank-optional  the run a blank matches may be empty
   --engine NAME          OCR engine: auto, vision, winocr, rapidocr, tesseract (default auto)
   --engines              list the engines, whether each works here, and what auto picks; exit
-  --lang L               OCR languages, e.g. de-DE,en-US (default: the engine decides)
+                         (exit code 1 when the configured engine, or with auto every
+                         engine, does not work here)
+  --lang L               OCR languages, e.g. de-DE,en-US or "de-DE en-US" (default: the engine decides)
   --no-ocr               PDF text layer only, images skipped
   --force-ocr            OCR every PDF page even if it has a text layer
   --mail                 also search .eml/.mbox
@@ -256,7 +258,7 @@ in both passes unless you change `exclude` or pass `--no-exclude`.
 ```
 # auto | vision | winocr | rapidocr | tesseract
 engine = auto
-# OCR languages, comma separated BCP 47 tags. Empty: the engine's default.
+# OCR languages, BCP 47 tags separated by commas or blanks. Empty: the engine's default.
 lang =
 # Directory names skipped in both passes (replaces the default list).
 exclude = .git, node_modules, .venv, __pycache__
@@ -267,7 +269,7 @@ name_blank = nonletter
 name_blank_optional = false
 # characters on each side of a content match, 0 = whole lines
 snippet = 80
-cache_dir = <platform default, see above>
+# cache_dir = <platform default, see above>
 # extra rga adapters, e.g. mail,ffmpeg
 adapters_extra =
 # live status line on a terminal
@@ -277,7 +279,10 @@ progress = true
 Every key can also be set as an environment variable, `RGA_OCR_<KEY>`
 in upper case (`RGA_OCR_LANG=de-DE,en-US`). Precedence: built-in
 default, then the profile, then the environment, then the flag. Unknown
-keys produce a warning and are ignored.
+keys produce a warning and are ignored, and so does an `RGA_OCR_` variable
+that is no setting (`RGA_OCR_LANGUAGE`, say). In the profile a `#` starts a
+comment at the start of a line or after a blank; `exclude = build#2` keeps
+its `#`.
 
 Tuning values that rarely need changing are environment-only:
 
