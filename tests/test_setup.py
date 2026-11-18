@@ -98,7 +98,260 @@ def test_extra_install_command_names_the_pypi_package(monkeypatch):
     monkeypatch.setattr(sc, "under_pipx", lambda: True)
     assert sc.extra_install_command("rapidocr") == 'pipx install --force "rga-ocr[rapidocr]"'
     monkeypatch.setattr(sc, "under_pipx", lambda: False)
+    monkeypatch.setattr(sc, "under_uv_tool", lambda: False)
+    monkeypatch.setattr(sc.sys, "platform", "linux")            # the Windows form has its own test
     assert sc.extra_install_command("vision") == f'"{sys.executable}" -m pip install "rga-ocr[vision]"'
+    assert sc.uninstall_command() == f'"{sys.executable}" -m pip uninstall rga-ocr'
+    monkeypatch.setattr(sc, "under_uv_tool", lambda: True)
+    assert sc.extra_install_command("tesseract") == 'uv tool install --force "rga-ocr[tesseract]"'
+    assert sc.uninstall_command() == "uv tool uninstall rga-ocr"
+    monkeypatch.setattr(sc, "under_pipx", lambda: True)
+    assert sc.uninstall_command() == "pipx uninstall rga-ocr"   # pipx is asked first
+
+
+def test_pip_commands_run_in_powershell_and_cmd(monkeypatch):
+    monkeypatch.setattr(sc, "under_pipx", lambda: False)
+    monkeypatch.setattr(sc, "under_uv_tool", lambda: False)
+    monkeypatch.setattr(sc.sys, "platform", "win32")
+    monkeypatch.setattr(sc.sys, "executable", r"C:\venvs\x\Scripts\python.exe")
+    assert sc.uninstall_command() == r"C:\venvs\x\Scripts\python.exe -m pip uninstall rga-ocr"
+    # a quoted path at the start of a line is an expression in PowerShell
+    monkeypatch.setattr(sc.sys, "executable", r"C:\Program Files\Py's\python.exe")
+    assert sc.extra_install_command("winocr") == (
+        r"& 'C:\Program Files\Py''s\python.exe' -m pip install " + '"rga-ocr[winocr]"')
+
+
+def test_printed_paths_are_literal_words(monkeypatch):
+    monkeypatch.setattr(sc.sys, "platform", "linux")
+    assert sc.quote_path("/a/b") == "/a/b"
+    assert sc.quote_path('/a b/$HOME"`x') == """'/a b/$HOME"`x'"""
+    monkeypatch.setattr(sc.sys, "platform", "win32")
+    assert sc.quote_path(r"D:\Cache [old]\it's") == r"'D:\Cache [old]\it''s'"
+
+
+def test_uv_tool_environment_is_recognised(monkeypatch, tmp_path):
+    env = tmp_path / "share" / "uv" / "tools" / "rga-ocr"
+    env.mkdir(parents=True)
+    monkeypatch.setattr(sc.sys, "prefix", str(env))
+    assert sc.under_uv_tool()                                   # by its place under uv/tools
+    moved = tmp_path / "elsewhere" / "rga-ocr"                  # UV_TOOL_DIR set
+    moved.mkdir(parents=True)
+    monkeypatch.setattr(sc.sys, "prefix", str(moved))
+    assert not sc.under_uv_tool()
+    (moved / "uv-receipt.toml").write_text("[tool]\n", encoding="utf-8")
+    assert sc.under_uv_tool()                                   # by uv's receipt
+    monkeypatch.setattr(sc.sys, "prefix", str(tmp_path / "venvs" / "tools" / "x"))
+    assert not sc.under_uv_tool()
+
+
+class Rec(sc.Out):
+    def section(self, title):
+        self.lines.append("== " + title)
+
+
+def fake_which(present):
+    return lambda t: ("/bin/" + t) if t in present else None
+
+
+@pytest.mark.parametrize("version, word, is_warning", [
+    (sc.RGA_TESTED, "ripgrep-all " + ".".join(map(str, sc.RGA_TESTED)), False),
+    ((0, 11, 0), "ripgrep-all 0.11.0", False),
+    ((0, 9, 6), "ripgrep-all 0.9.6 is older than", True),
+    (None, "gave no version number", True),
+])
+def test_check_tools_reports_the_rga_version_without_failing(monkeypatch, capsys, version, word, is_warning):
+    monkeypatch.setattr(sc.shutil, "which", fake_which({"rga", "rga-preproc", "rg", "pandoc"}))
+    monkeypatch.setattr(sc, "rga_version", lambda: version)
+    out = Rec()
+    assert sc.check_tools(out) is True                 # an old rga warns, it is no TODO
+    assert out.todos == []
+    assert any(word in ln for ln in out.lines), out.lines
+    assert any("tested with" in ln for ln in out.lines) == is_warning, out.lines
+    capsys.readouterr()
+
+
+def test_rga_version_reads_the_real_binary_and_survives_a_missing_one():
+    assert sc.rga_version("no-such-rga-binary") is None
+    if shutil.which("rga"):
+        v = sc.rga_version()
+        assert v is not None and len(v) == 3, v        # any release: an old one only warns
+
+
+@pytest.mark.parametrize("stdout, code, want", [
+    ("ripgrep-all 0.10.10\n", 0, (0, 10, 10)),
+    ("rga 0.10.9\r\n", 0, (0, 10, 9)),
+    ("built with rustc 1.84.0\nripgrep-all 0.9.6\n", 0, (0, 9, 6)),     # not the first number in sight
+    ("ripgrep-all 0.10.10\n", 1, None),
+    ("ripgrep-all 0.10\n", 0, None),
+    ("", 0, None),
+])
+def test_rga_version_reads_the_line_that_names_the_program(monkeypatch, stdout, code, want):
+    import subprocess
+    monkeypatch.setattr(sc.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, code, stdout, ""))
+    assert sc.rga_version() == want
+
+
+def test_check_tools_wants_rga_preproc(monkeypatch, capsys):
+    monkeypatch.setattr(sc.shutil, "which", fake_which({"rga", "rg", "pandoc", "brew"}))
+    monkeypatch.setattr(sc, "rga_version", lambda: sc.RGA_TESTED)
+    monkeypatch.setattr(sc, "package_manager", lambda: "brew")
+    out = Rec()
+    assert sc.check_tools(out) is False
+    assert out.todos == [sc.PREPROC_HINT], out.todos   # no "brew install" for a tool that has no package
+    monkeypatch.setattr(sc, "package_manager", lambda: None)
+    out = Rec()
+    assert sc.check_tools(out) is False
+    assert out.todos == [sc.PREPROC_HINT], out.todos
+    # scoop has no package for it either, and must still say what to do
+    assert sc.install_commands(["rga-preproc"], "scoop") == [sc.PREPROC_HINT]
+    assert sc.install_commands(["rga", "rga-preproc"], "scoop") == ["scoop install rga"]
+    # with rga missing too, installing rga covers it
+    assert sc.install_commands(["rga", "rga-preproc"], "brew") == ["brew install ripgrep-all"]
+    capsys.readouterr()
+
+
+def test_remove_takes_our_adapters_out_and_keeps_the_rest(tmp_path, capsys):
+    cfg_path = str(tmp_path / "rga" / "config.jsonc")
+    os.makedirs(os.path.dirname(cfg_path))
+    merged = sc.merge_config(sc.load_jsonc(JSONC), sc.adapter_entries())
+    merged["custom_adapters"].append({"name": "visionimg", "binary": "/old", "args": []})
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(merged, f)
+    before = open(cfg_path, encoding="utf-8").read()
+
+    out = Rec()
+    assert sc.remove_from_rga_config(out, cfg_path) is True
+    after = json.load(open(cfg_path, encoding="utf-8"))
+    assert [a["name"] for a in after["custom_adapters"]] == ["mine"]
+    assert after["max_archive_recursion"] == 4
+    assert open(cfg_path + ".bak", encoding="utf-8").read() == before
+    assert any(ln.startswith("removed ocrpdf, ocrimg, officexml, visionimg") for ln in out.lines), out.lines
+
+    # a second run finds nothing and writes nothing
+    stamp = os.stat(cfg_path).st_mtime_ns
+    out = Rec()
+    assert sc.remove_from_rga_config(out, cfg_path) is True
+    assert os.stat(cfg_path).st_mtime_ns == stamp
+    assert sorted(os.listdir(os.path.dirname(cfg_path))) == ["config.jsonc", "config.jsonc.bak"]
+    assert any("left untouched" in ln for ln in out.lines), out.lines
+
+    capsys.readouterr()
+
+
+def test_remove_refuses_what_it_cannot_do_safely(tmp_path, monkeypatch, capsys):
+    # a path somebody typed and that is not there: a typo, not "done"
+    out = Rec()
+    assert sc.remove_from_rga_config(out, str(tmp_path / "absent.jsonc")) is False
+    assert any("no such file" in ln for ln in out.lines), out.lines
+    # rga's own default config that was never written: nothing to do
+    monkeypatch.setattr(sc.paths, "rga_config_path", lambda: str(tmp_path / "default.jsonc"))
+    out = Rec()
+    assert sc.remove_from_rga_config(out) is True
+    for text in ("{ not json", "[1, 2]", "null", '{"custom_adapters": ["ocrimg"]}',
+                 '{"custom_adapters": {"name": "ocrimg"}}'):
+        odd = str(tmp_path / "odd.jsonc")
+        with open(odd, "w", encoding="utf-8") as f:
+            f.write(text)
+        out = Rec()
+        assert sc.remove_from_rga_config(out, odd) is False, text
+        assert any("by hand" in ln for ln in out.lines), (text, out.lines)
+        assert open(odd, encoding="utf-8").read() == text
+    assert os.listdir(tmp_path) == ["odd.jsonc"]                # no backup of a file left alone
+    capsys.readouterr()
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs a read-only file")
+def test_remove_reports_a_config_it_cannot_write(tmp_path, capsys):
+    cfg_path = str(tmp_path / "config.jsonc")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump({"custom_adapters": sc.adapter_entries()}, f)
+    before = open(cfg_path, encoding="utf-8").read()
+    os.chmod(cfg_path, 0o444)
+    out = Rec()
+    assert sc.remove_from_rga_config(out, cfg_path) is False
+    assert any(ln.startswith("cannot write") for ln in out.lines), out.lines
+    assert open(cfg_path, encoding="utf-8").read() == before
+    capsys.readouterr()
+
+
+def test_backups_in_the_same_second_do_not_overwrite_each_other(tmp_path):
+    cfg_path = str(tmp_path / "config.jsonc")
+    seen = []
+    for _ in range(4):
+        b = sc.backup_path(cfg_path)
+        assert b not in seen
+        seen.append(b)
+        open(b, "w").close()
+    assert seen[0] == cfg_path + ".bak"
+
+
+def test_leftovers_never_print_a_recursive_delete_of_the_cache_dir(tmp_path, monkeypatch, capsys):
+    """cache_dir is the user's word: it can be the home directory or /."""
+    profile = tmp_path / "pro file"
+    profile.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sc.sys, "platform", "linux")            # the commands asserted below are the POSIX ones
+    monkeypatch.setattr(sc.paths, "tessdata_dir", lambda: str(tmp_path / "tess data"))
+    (tmp_path / "tess data").mkdir()
+    for cache_dir in ("~", "/", str(tmp_path), "."):
+        out = Rec()
+        sc.leftovers(out, str(profile), cache_dir, str(profile))
+        cache_lines = [ln for ln in out.lines if ln.startswith("OCR cache")]
+        assert len(cache_lines) == 1 and "rm " not in cache_lines[0], out.lines
+        assert cache_lines[0].endswith(f"rga-ocr --clear-cache all --config '{profile}'"), cache_lines
+        assert f"profile: rm -- '{profile}'" in out.lines, out.lines
+        assert f"Tesseract language files: rm -rf -- '{tmp_path / 'tess data'}'" in out.lines, out.lines
+    out = Rec()
+    sc.leftovers(out, str(profile), str(tmp_path / "no-cache-here"))
+    assert not any(ln.startswith("OCR cache") for ln in out.lines)
+    capsys.readouterr()
+
+
+def test_setup_remove_end_to_end_deletes_nothing_but_the_entries(cli, tmp_path):
+    import subprocess
+    cfg = str(tmp_path / "other.jsonc")
+    with open(cfg, "w", encoding="utf-8") as f:
+        json.dump(sc.merge_config({"custom_adapters": [{"name": "mine", "binary": "/usr/bin/true", "args": []}]},
+                                  sc.adapter_entries()), f)
+    profile = tmp_path / "profile"
+    cache = tmp_path / "cache"
+    (cache / "vision-auto").mkdir(parents=True)
+    profile.write_text(f"cache_dir = {cache}\n", encoding="utf-8")
+
+    env = {k: v for k, v in cli.env.items() if k != NAMES["env_prefix"] + "CACHE_DIR"}   # the profile names it
+
+    def run(*args):
+        return subprocess.run(NAMES["cli"] + ["--rga-config-file=" + cfg, "setup", *args], cwd=cli.root,
+                              env=env, capture_output=True, text=True, encoding="utf-8")
+    p = run("--remove", "--config", str(profile))
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert [a["name"] for a in json.load(open(cfg, encoding="utf-8"))["custom_adapters"]] == ["mine"]
+    assert os.path.isfile(cfg + ".bak")
+    assert profile.exists() and (cache / "vision-auto").is_dir()        # printed, not deleted
+    quoted = sc.quote_path(str(profile))                        # per platform, as the code prints it
+    assert f"OCR cache in {cache}: rga-ocr --clear-cache all --config {quoted}" in p.stdout, p.stdout
+    rm = "Remove-Item -LiteralPath" if sys.platform == "win32" else "rm --"
+    assert f"profile: {rm} {quoted}" in p.stdout, p.stdout
+    assert "uninstall rga-ocr" in p.stdout, p.stdout
+    # the printed cache command works and takes only the cache directories
+    (cache / "vision-auto" / "cache.sqlite3").write_bytes(b"")
+    (cache / "mine.txt").write_text("keep", encoding="utf-8")
+    c = subprocess.run(NAMES["cli"] + ["--clear-cache", "all", "--config", str(profile)], cwd=cli.root,
+                       env=env, capture_output=True, text=True, encoding="utf-8")
+    assert c.returncode == 0, (c.stdout, c.stderr)
+    assert not (cache / "vision-auto").exists() and (cache / "mine.txt").exists()
+    # an empty path (`--rga-config-file=$UNSET`) must not reach the real config
+    e = subprocess.run(NAMES["cli"] + ["--rga-config-file=", "setup", "--remove"], cwd=cli.root,
+                       env=env, capture_output=True, text=True, encoding="utf-8")
+    assert e.returncode == 2 and "--rga-config-file= needs a path" in e.stderr, (e.stdout, e.stderr)
+    p = run("--remove", "--config", str(profile))
+    assert p.returncode == 0 and "left untouched" in p.stdout, p.stdout
+    other = subprocess.run(NAMES["cli"] + ["--rga-config-file=" + cfg + ".typo", "setup", "--remove"],
+                           cwd=cli.root, env=env, capture_output=True, text=True, encoding="utf-8")
+    assert other.returncode == 1 and "no such file" in other.stdout, other.stdout
+    for bad in (["--remove", "--apply"], ["--remove", "--engine", "vision"], ["--remove", "--lang=de"]):
+        p = run(*bad)
+        assert p.returncode == 2 and "--remove goes with --config only" in p.stderr, (bad, p.stderr)
 
 
 def test_setup_help_and_bad_flag(cli):

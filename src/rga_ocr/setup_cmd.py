@@ -4,6 +4,8 @@ Dry run by default: every section prints what is missing and the command
 that fixes it. With --apply the tool does what it can itself (fetch
 Tesseract language files, warm the RapidOCR models, merge the adapter
 entries into rga's config) and prints the rest for the user to run.
+--remove is the way back and no dry run: it takes the entries out of
+rga's config at once and prints commands for everything else.
 
 Sections: tools on PATH, the OCR engine, the ripgrep-all config, a
 verification, and hints for leftovers from the rga-vision days.
@@ -13,6 +15,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -37,6 +40,7 @@ OFFICE_MIME = ["application/vnd.openxmlformats-officedocument.spreadsheetml.shee
 
 USAGE = f"""\
 usage: {PROG} [--rga-config-file=F] setup [--apply] [--engine NAME] [--lang L] [--config PATH]
+       {PROG} [--rga-config-file=F] setup --remove [--config PATH]
 
 Checks the tools on PATH, the OCR engine, and ripgrep-all's config, and
 prints what is missing with the command that installs it. --apply fetches
@@ -46,9 +50,15 @@ runs a timestamped one, and comments in the file are not preserved.
 Package installs stay commands for you to run. --engine, --lang and
 --config override the profile; --rga-config-file=F targets another rga
 config. Exit status: 0 ready, 1 something to do, 2 usage error.
+
+--remove takes the three adapters out of rga's config again, with the same
+backup copy, and prints the commands that delete the cache, the profile,
+the fetched language files and the package. It deletes none of them itself.
 """
 
-REQUIRED_TOOLS = ("rga", "rg", "pandoc")
+REQUIRED_TOOLS = ("rga", "rga-preproc", "rg", "pandoc")
+# the ripgrep-all releases the test suite runs against; older ones get a warning
+RGA_TESTED = (0, 10, 9) if sys.platform == "win32" else (0, 10, 10)
 OPTIONAL_TOOLS = {"ffmpeg": "the ffmpeg adapter (adapters_extra = ffmpeg)"}
 
 
@@ -85,7 +95,7 @@ def install_commands(missing, pm):
     manager; rga comes from its release archive where no package exists."""
     missing = set(missing)
     want_rga = "rga" in missing
-    others = missing - {"rga"}
+    others = missing - {"rga", "rga-preproc"}
     pkg = {
         "brew": {"rg": "ripgrep", "pandoc": "pandoc", "ffmpeg": "ffmpeg", "rga": "ripgrep-all"},
         "apt-get": {"rg": "ripgrep", "pandoc": "pandoc", "ffmpeg": "ffmpeg"},
@@ -102,6 +112,8 @@ def install_commands(missing, pm):
                                                 for t in others)
         if names:
             cmds.append("scoop install " + " ".join(names))
+        if "rga-preproc" in missing and not want_rga:
+            cmds.append(PREPROC_HINT)
         return cmds
     table = pkg.get(pm, {})
     names = sorted({table[t] for t in (others | ({"rga"} if want_rga else set())) if t in table})
@@ -114,7 +126,27 @@ def install_commands(missing, pm):
         url = rga_download_url()
         cmds.append(f"download {url} and put rga (and rga-preproc) on PATH" if url
                     else "build rga from source: cargo install ripgrep_all")
+    if "rga-preproc" in missing and not want_rga:
+        cmds.append(PREPROC_HINT)
     return cmds
+
+
+PREPROC_HINT = ("put rga-preproc on PATH next to rga: it ships in the same package or archive, "
+                "and rga starts it for every file")
+
+
+def rga_version(binary="rga"):
+    """(0, 10, 10) from `rga --version`, or None when it cannot be read."""
+    try:
+        p = subprocess.run([binary, "--version"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0:
+        return None
+    # the line that names the program, not the first number anywhere
+    m = re.search(r"^(?:ripgrep-all|rga)\s+v?(\d+)\.(\d+)\.(\d+)", p.stdout, re.M)
+    return tuple(int(x) for x in m.groups()) if m else None
 
 
 def check_tools(out):
@@ -122,17 +154,30 @@ def check_tools(out):
     missing = []
     for t in REQUIRED_TOOLS:
         p = shutil.which(t)
-        out.line(f"{t:10} {p or 'MISSING'}")
+        out.line(f"{t:11} {p or 'MISSING'}")
         if not p:
             missing.append(t)
     for t, why in OPTIONAL_TOOLS.items():
         p = shutil.which(t)
-        out.line(f"{t:10} {p or 'missing (optional: ' + why + ')'}")
+        out.line(f"{t:11} {p or 'missing (optional: ' + why + ')'}")
+    if "rga" not in missing:
+        v = rga_version()
+        dotted = ".".join(map(str, RGA_TESTED))
+        if v is None:
+            out.line(f"rga --version gave no version number; {PROG} is tested with ripgrep-all {dotted}")
+        elif v < RGA_TESTED:
+            # a warning, not a TODO: an older rga may well work
+            out.line(f"ripgrep-all {'.'.join(map(str, v))} is older than {dotted}, "
+                     f"the release {PROG} is tested with; upgrade it if searches misbehave")
+        else:
+            out.line(f"ripgrep-all {'.'.join(map(str, v))}")
     if missing:
         pm = package_manager()
         if pm:
             for c in install_commands(missing, pm):
                 out.todo(c)
+        elif missing == ["rga-preproc"]:
+            out.todo(PREPROC_HINT)
         else:
             url = rga_download_url()
             out.todo(f"install {', '.join(missing)} (no package manager found"
@@ -146,11 +191,48 @@ def under_pipx():
     return "pipx" in os.path.normcase(sys.prefix).split(os.sep)
 
 
+def under_uv_tool():
+    """True inside an environment `uv tool install` made: uv writes a
+    uv-receipt.toml into it and keeps it under <data dir>/uv/tools/<name>
+    (UV_TOOL_DIR moves that, the receipt stays)."""
+    if os.path.isfile(os.path.join(sys.prefix, "uv-receipt.toml")):
+        return True
+    parts = os.path.normcase(sys.prefix).split(os.sep)
+    return parts[-3:-1] == ["uv", "tools"]
+
+
+def python_command():
+    """This interpreter as the first word of a command line. On Windows a
+    bare path runs in cmd and PowerShell alike; a path that needs quotes
+    is no command in PowerShell without the call operator."""
+    exe = sys.executable
+    if sys.platform == "win32":
+        return exe if re.fullmatch(r"[\w.:\\/-]+", exe) else "& " + quote_path(exe)
+    return f'"{exe}"'
+
+
+def quote_path(path):
+    """A path as one literal shell word: nothing in it is expanded."""
+    if sys.platform == "win32":
+        return "'" + path.replace("'", "''") + "'"
+    return shlex.quote(path)
+
+
 def extra_install_command(extra):
     spec = f"{PROG}[{extra}]"
     if under_pipx():
         return f'pipx install --force "{spec}"'
-    return f'"{sys.executable}" -m pip install "{spec}"'
+    if under_uv_tool():
+        return f'uv tool install --force "{spec}"'
+    return f'{python_command()} -m pip install "{spec}"'
+
+
+def uninstall_command():
+    if under_pipx():
+        return f"pipx uninstall {PROG}"
+    if under_uv_tool():
+        return f"uv tool uninstall {PROG}"
+    return f"{python_command()} -m pip uninstall {PROG}"
 
 
 def check_engine(out, name, langs, apply):
@@ -331,7 +413,12 @@ def backup_path(cfg_path):
     if not os.path.exists(first):
         return first
     import time
-    return f"{cfg_path}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path, n = f"{cfg_path}.{stamp}.bak", 1
+    while os.path.exists(path):
+        n += 1
+        path = f"{cfg_path}.{stamp}-{n}.bak"
+    return path
 
 
 def check_rga_config(out, apply, rga_config=None):
@@ -378,6 +465,87 @@ def check_rga_config(out, apply, rga_config=None):
         f.write("\n")
     out.line(f"wrote {cfg_path} (comments from the previous file are not preserved)")
     return True
+
+
+def remove_adapters(existing):
+    """(config without our entries, names taken out). Legacy rga-vision
+    entries go too; every other custom adapter stays."""
+    ours = set(ADAPTER_NAMES) | set(LEGACY_ADAPTER_NAMES)
+    cfg = dict(existing)
+    adapters = cfg.get("custom_adapters") or []
+    gone = [a.get("name") for a in adapters if a.get("name") in ours]
+    if gone:
+        cfg["custom_adapters"] = [a for a in adapters if a.get("name") not in ours]
+    return cfg, gone
+
+
+def remove_from_rga_config(out, rga_config=None):
+    out.section("ripgrep-all config")
+    cfg_path = rga_config or paths.rga_config_path()
+    out.line(f"file: {cfg_path}")
+    by_hand = f"take the {', '.join(ADAPTER_NAMES)} entries out by hand"
+    if not os.path.exists(cfg_path):
+        if rga_config:
+            # a path somebody typed: a slip must not read as "done"
+            out.line("no such file; check the path given with --rga-config-file=")
+            return False
+        out.line("absent; nothing to remove")
+        return True
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            existing = load_jsonc(f.read())
+    except (OSError, ValueError) as e:
+        out.line(f"cannot parse {cfg_path}: {e}; {by_hand}")
+        return False
+    adapters = existing.get("custom_adapters") if isinstance(existing, dict) else None
+    if not isinstance(existing, dict) or not (adapters is None or (
+            isinstance(adapters, list) and all(isinstance(a, dict) for a in adapters))):
+        out.line(f"{cfg_path} is not shaped like an rga config; {by_hand}")
+        return False
+    cfg, gone = remove_adapters(existing)
+    if not gone:
+        out.line(f"holds no {PROG} adapter; left untouched")
+        return True
+    try:
+        bak = backup_path(cfg_path)
+        shutil.copy(cfg_path, bak)
+        out.line(f"backup: {bak}")
+        text = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as e:
+        out.line(f"cannot write {cfg_path}: {e}; {by_hand}")
+        return False
+    out.line(f"removed {', '.join(gone)} (comments from the previous file are not preserved)")
+    kept = [a.get("name") for a in cfg["custom_adapters"]]
+    out.line(f"adapters left: {', '.join(kept) or '(none)'}")
+    return True
+
+
+def leftovers(out, profile, cache_dir, config_flag=None):
+    """What --remove leaves in place, each with the command that deletes it.
+
+    The cache goes through --clear-cache: cache_dir is whatever the profile
+    says, the home directory included, and --clear-cache deletes only the
+    cache directories in it. The other two paths are our own."""
+    out.section("left in place (run what you want gone, in this order)")
+    win = sys.platform == "win32"
+    rm_dir, rm_file = (("Remove-Item -Recurse -LiteralPath", "Remove-Item -LiteralPath") if win
+                       else ("rm -rf --", "rm --"))
+    found = False
+    cache = os.path.abspath(os.path.expanduser(cache_dir))
+    if os.path.isdir(cache):
+        found = True
+        out.line(f"OCR cache in {cache}: {PROG} --clear-cache all"
+                 + (f" --config {quote_path(config_flag)}" if config_flag else ""))
+    for label, path, rm in (("profile", profile, rm_file),
+                            ("Tesseract language files", paths.tessdata_dir(), rm_dir)):
+        if os.path.exists(path):
+            found = True
+            out.line(f"{label}: {rm} {quote_path(os.path.abspath(path))}")
+    if not found:
+        out.line("no cache, profile or language files found")
+    out.line(f"the package: {uninstall_command()}")
 
 
 def verify(out, apply, rga_config=None):
@@ -448,12 +616,14 @@ class Out:
 
 
 def parse(argv):
-    o = {"apply": False, "engine": None, "lang": None, "config": None}
+    o = {"apply": False, "remove": False, "engine": None, "lang": None, "config": None}
     args = list(argv)
     while args:
         a = args.pop(0)
         if a == "--apply":
             o["apply"] = True
+        elif a == "--remove":
+            o["remove"] = True
         elif a in ("-h", "--help"):
             print(USAGE, end="")
             raise SystemExit(0)
@@ -472,6 +642,9 @@ def parse(argv):
         else:
             sys.stderr.write(USAGE)
             raise SystemExit(2)
+    if o["remove"] and (o["apply"] or o["engine"] is not None or o["lang"] is not None):
+        sys.stderr.write(f"{PROG} setup: --remove goes with --config only\n")
+        raise SystemExit(2)
     return o
 
 
@@ -479,8 +652,20 @@ def main(argv, config_path, settings_from, rga_config=None):
     """rga_config: the PATH of a --rga-config-file=PATH given before `setup`;
     the entries are then written there and the verification reads it."""
     o = parse(argv)
+    if rga_config == "":
+        # `--rga-config-file=$UNSET` must not fall through to the real config
+        print(f"{PROG}: --rga-config-file= needs a path", file=sys.stderr)
+        return 2
     profile = config_path(o["config"])
     st = settings_from(profile)
+    if o["remove"]:
+        out = Out()
+        print(f"{PROG} setup --remove")
+        ok = remove_from_rga_config(out, rga_config)
+        leftovers(out, profile, st["cache_dir"], o["config"])
+        print()
+        print(f"{PROG} is out of rga's config" if ok else "not done; see above")
+        return 0 if ok else 1
     name = o["engine"] or st["engine"] or "auto"
     langs = engines.parse_langs(o["lang"] if o["lang"] is not None else st["lang"])
     out = Out()
