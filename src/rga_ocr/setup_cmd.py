@@ -219,6 +219,11 @@ def under_homebrew():
     return homebrew_prefix() is not None
 
 
+def homebrew_formula():
+    """The formula this environment belongs to, as `brew` names it."""
+    return os.path.basename(os.path.dirname(homebrew_prefix()))
+
+
 def adapter_python():
     """The interpreter rga starts the adapters with: this one, by a path
     that outlives an upgrade of the package where there is one."""
@@ -254,9 +259,21 @@ def extra_install_command(extra):
     if under_uv_tool():
         return f'uv tool install --force "{spec}"'
     if under_homebrew():
-        return (f'uv tool install "{spec}"   # the Homebrew formula carries the vision '
-                f"engine only; `brew uninstall {PROG}` first")
+        # one line that is safe to paste: no comment, since zsh on macOS
+        # does not treat "#" as one at the prompt
+        # The PyPI install comes first: if pipx is missing, the line stops
+        # there and the formula stays.
+        return f'pipx install "{spec}" && brew uninstall {homebrew_formula()} && {PROG} setup --apply'
     return f'{python_command()} -m pip install "{spec}"'
+
+
+def todo_extra(out, extra, note=""):
+    """The TODO line that installs an engine's extra."""
+    if under_homebrew():
+        out.line("the Homebrew formula carries the vision engine only; "
+                 "another engine needs the PyPI install in its place")
+        note = ""
+    out.todo(extra_install_command(extra) + note)
 
 
 def uninstall_command():
@@ -265,7 +282,7 @@ def uninstall_command():
     if under_uv_tool():
         return f"uv tool uninstall {PROG}"
     if under_homebrew():
-        return f"brew uninstall {PROG}"
+        return f"brew uninstall {homebrew_formula()}"
     return f"{python_command()} -m pip uninstall {PROG}"
 
 
@@ -283,7 +300,7 @@ def check_engine(out, name, langs, apply):
             except engines.EngineError:
                 return False
             if not cls.installed():
-                out.todo(extra_install_command(cls.extra))
+                todo_extra(out, cls.extra)
                 return False
             return _engine_fixes(out, cls, langs, apply)
         # auto: the first engine of this platform's order whose Python side
@@ -296,7 +313,7 @@ def check_engine(out, name, langs, apply):
             if cls.installed():
                 out.line(f"auto will pick {n} once it is ready: {cls.available(langs)[1]}")
                 return _engine_fixes(out, cls, langs, apply)
-        out.todo(extra_install_command("rapidocr") + "   # the portable engine")
+        todo_extra(out, "rapidocr", "   # the portable engine")
         return False
     out.line(f"configured: {name} -> {cls.name} ({engines.cache_tag(cls, langs)})")
     return _engine_fixes(out, cls, langs, apply)

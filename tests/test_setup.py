@@ -140,7 +140,14 @@ def test_homebrew_environment_gets_the_opt_path(monkeypatch, tmp_path):
     assert sc.adapter_python() == stable
     assert all(e["binary"] == stable for e in sc.adapter_entries())
     assert sc.uninstall_command() == "brew uninstall rga-ocr"
-    assert sc.extra_install_command("tesseract").startswith('uv tool install "rga-ocr[tesseract]"')
+    hint = sc.extra_install_command("tesseract")
+    assert hint == 'pipx install "rga-ocr[tesseract]" && brew uninstall rga-ocr && rga-ocr setup --apply'
+    # pasted into zsh, which has no comments at the prompt by default,
+    # nothing in the line may run on its own
+    assert not set("#`;") & set(hint)
+    out = sc.Out()
+    sc.todo_extra(out, "rapidocr", "   # the portable engine")
+    assert out.todos == [sc.extra_install_command("rapidocr")] and "vision engine only" in out.lines[0]
     # started through the opt link, the prefix is the stable one already
     monkeypatch.setattr(sc.sys, "prefix", str(opt / "libexec"))
     monkeypatch.setattr(sc.sys, "executable", stable)

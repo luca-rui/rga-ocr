@@ -12,7 +12,8 @@ All notable changes to this project are documented here. The format follows
   path of the interpreter into rga's config, which is gone after `brew
   upgrade`. It now writes the path through Homebrew's `opt` link.
 - The install and uninstall hints of `setup` know a Homebrew install:
-  `brew uninstall rga-ocr` instead of a `pip` line.
+  `brew uninstall rga-ocr` instead of a `pip` line, and for another engine
+  one line that swaps the formula for the PyPI install.
 
 ## [0.2.0] - 2026-11-18
 
