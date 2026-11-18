@@ -76,6 +76,14 @@ All notable changes to this project are documented here. The format follows
   interpreter path, or with `&` when the path needs quotes, so it runs in
   PowerShell.
 
+### Removed
+
+- The hints for leftovers from the time the tool was called `rga-vision`
+  are gone: the warnings about `RGA_VISION_` variables and the old
+  profile, the "leftovers from rga-vision" section of `rga-ocr setup`,
+  and the removal of the `visionpdf` and `visionimg` entries from rga's
+  config. Such entries now stay like any other custom adapter.
+
 ### Fixed
 
 - `--no-ocr` no longer misses PDFs silently. It used rga's `poppler`

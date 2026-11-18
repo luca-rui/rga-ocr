@@ -3,7 +3,3 @@
 PROG = "rga-ocr"
 VERSION = "0.1.1"
 ENV_PREFIX = "RGA_OCR_"
-
-# names from before the rename, for migration hints only
-LEGACY_PROG = "rga-vision"
-LEGACY_ENV_PREFIX = "RGA_VISION_"

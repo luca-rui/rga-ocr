@@ -22,7 +22,7 @@ import tempfile
 import threading
 import time
 
-from rga_ocr import ENV_PREFIX, LEGACY_ENV_PREFIX, LEGACY_PROG, PROG, VERSION, engines, paths
+from rga_ocr import ENV_PREFIX, PROG, VERSION, engines, paths
 
 DEFAULT_EXCLUDE = ".git, node_modules, .venv, __pycache__"
 DEFAULTS = {
@@ -1076,17 +1076,6 @@ def run_contents(o, st, printer, root, query):
 
 # ----------------------------------------------------------------- main
 
-def legacy_hints(o, cfg):
-    """One warning each for leftovers from the time the tool was called rga-vision."""
-    old_env = sorted(k for k in os.environ if k.startswith(LEGACY_ENV_PREFIX))
-    if old_env:
-        warn(f"{', '.join(old_env)} ignored; the variables are called {ENV_PREFIX}<KEY> now")
-    if o["config"] is None and not os.environ.get(ENV_PREFIX + "CONFIG") and not os.path.exists(cfg):
-        old = os.path.join(os.path.dirname(os.path.dirname(cfg)), LEGACY_PROG, "config")
-        if os.path.isfile(old):
-            warn(f"profile {old} is no longer read; move it to {cfg}")
-
-
 def rga_config_flag(args):
     """The PATH of a --rga-config-file=PATH among rga pass-through flags, or None."""
     for a in args:
@@ -1109,7 +1098,6 @@ def main(argv=None):
                                   rga_config=rga_config_flag(argv[:i]))
     o = parse_args(argv)
     cfg = config_path(o["config"])
-    legacy_hints(o, cfg)
     environment_hints()
     if o["init"]:
         return init_config(cfg)

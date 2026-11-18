@@ -18,7 +18,7 @@ JSONC = """\
   /* block comment, with a "quoted" string inside */
   "custom_adapters": [
     {
-      "name": "visionpdf", "binary": "/old/bin/rga-adapter", "args": ["pdf", "${input_virtual_path}"],
+      "name": "other", "binary": "/opt/bin/other-adapter", "args": ["pdf", "${input_virtual_path}"],
       "description": "slash // inside a string stays",
     },
     {"name": "mine", "binary": "/usr/bin/true", "args": [],},
@@ -32,7 +32,7 @@ def test_load_jsonc_strips_comments_and_trailing_commas():
     cfg = sc.load_jsonc(JSONC)
     assert cfg["max_archive_recursion"] == 4
     names = [a["name"] for a in cfg["custom_adapters"]]
-    assert names == ["visionpdf", "mine"]
+    assert names == ["other", "mine"]
     assert cfg["custom_adapters"][0]["description"] == "slash // inside a string stays"
     assert sc.load_jsonc("") == {}
     assert sc.load_jsonc("// only a comment\n") == {}
@@ -48,13 +48,13 @@ def test_load_jsonc_trailing_commas_only_outside_strings():
             sc.load_jsonc(bad)
 
 
-def test_merge_keeps_foreign_entries_and_drops_legacy_ones():
+def test_merge_keeps_foreign_entries():
     cfg = sc.load_jsonc(JSONC)
     merged = sc.merge_config(cfg, sc.adapter_entries())
     names = [a["name"] for a in merged["custom_adapters"]]
-    assert names == ["ocrpdf", "ocrimg", "officexml", "mine"]
+    assert names == ["ocrpdf", "ocrimg", "officexml", "other", "mine"]
     assert merged["max_archive_recursion"] == 4
-    assert cfg["custom_adapters"][0]["name"] == "visionpdf"      # input untouched
+    assert [a["name"] for a in cfg["custom_adapters"]] == ["other", "mine"]      # input untouched
     # idempotent
     again = sc.merge_config(merged, sc.adapter_entries())
     assert again == merged
@@ -216,7 +216,6 @@ def test_remove_takes_our_adapters_out_and_keeps_the_rest(tmp_path, capsys):
     cfg_path = str(tmp_path / "rga" / "config.jsonc")
     os.makedirs(os.path.dirname(cfg_path))
     merged = sc.merge_config(sc.load_jsonc(JSONC), sc.adapter_entries())
-    merged["custom_adapters"].append({"name": "visionimg", "binary": "/old", "args": []})
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump(merged, f)
     before = open(cfg_path, encoding="utf-8").read()
@@ -224,10 +223,10 @@ def test_remove_takes_our_adapters_out_and_keeps_the_rest(tmp_path, capsys):
     out = Rec()
     assert sc.remove_from_rga_config(out, cfg_path) is True
     after = json.load(open(cfg_path, encoding="utf-8"))
-    assert [a["name"] for a in after["custom_adapters"]] == ["mine"]
+    assert [a["name"] for a in after["custom_adapters"]] == ["other", "mine"]
     assert after["max_archive_recursion"] == 4
     assert open(cfg_path + ".bak", encoding="utf-8").read() == before
-    assert any(ln.startswith("removed ocrpdf, ocrimg, officexml, visionimg") for ln in out.lines), out.lines
+    assert any(ln.startswith("removed ocrpdf, ocrimg, officexml") for ln in out.lines), out.lines
 
     # a second run finds nothing and writes nothing
     stamp = os.stat(cfg_path).st_mtime_ns
