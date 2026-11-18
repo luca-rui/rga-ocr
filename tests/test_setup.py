@@ -100,6 +100,7 @@ def test_extra_install_command_names_the_pypi_package(monkeypatch):
     assert sc.extra_install_command("rapidocr") == 'pipx install --force "rga-ocr[rapidocr]"'
     monkeypatch.setattr(sc, "under_pipx", lambda: False)
     monkeypatch.setattr(sc, "under_uv_tool", lambda: False)
+    monkeypatch.setattr(sc, "under_homebrew", lambda: False)
     monkeypatch.setattr(sc.sys, "platform", "linux")            # the Windows form has its own test
     assert sc.extra_install_command("vision") == f'"{sys.executable}" -m pip install "rga-ocr[vision]"'
     assert sc.uninstall_command() == f'"{sys.executable}" -m pip uninstall rga-ocr'
@@ -113,6 +114,7 @@ def test_extra_install_command_names_the_pypi_package(monkeypatch):
 def test_pip_commands_run_in_powershell_and_cmd(monkeypatch):
     monkeypatch.setattr(sc, "under_pipx", lambda: False)
     monkeypatch.setattr(sc, "under_uv_tool", lambda: False)
+    monkeypatch.setattr(sc, "under_homebrew", lambda: False)
     monkeypatch.setattr(sc.sys, "platform", "win32")
     monkeypatch.setattr(sc.sys, "executable", r"C:\venvs\x\Scripts\python.exe")
     assert sc.uninstall_command() == r"C:\venvs\x\Scripts\python.exe -m pip uninstall rga-ocr"
@@ -120,6 +122,35 @@ def test_pip_commands_run_in_powershell_and_cmd(monkeypatch):
     monkeypatch.setattr(sc.sys, "executable", r"C:\Program Files\Py's\python.exe")
     assert sc.extra_install_command("winocr") == (
         r"& 'C:\Program Files\Py''s\python.exe' -m pip install " + '"rga-ocr[winocr]"')
+
+
+@pytest.mark.skipif(os.sep != "/", reason="Homebrew paths")
+def test_homebrew_environment_gets_the_opt_path(monkeypatch, tmp_path):
+    cellar = tmp_path / "Cellar" / "rga-ocr" / "0.2.1" / "libexec"
+    (cellar / "bin").mkdir(parents=True)
+    (cellar / "bin" / "python").write_text("", encoding="utf-8")
+    monkeypatch.setattr(sc.sys, "prefix", str(cellar))
+    monkeypatch.setattr(sc.sys, "executable", str(cellar / "bin" / "python"))
+    opt = tmp_path / "opt" / "rga-ocr"
+    stable = str(opt / "libexec" / "bin" / "python")
+    assert sc.under_homebrew()
+    assert sc.adapter_python() == str(cellar / "bin" / "python")    # no opt link yet
+    opt.parent.mkdir()
+    opt.symlink_to(cellar.parent)
+    assert sc.adapter_python() == stable
+    assert all(e["binary"] == stable for e in sc.adapter_entries())
+    assert sc.uninstall_command() == "brew uninstall rga-ocr"
+    assert sc.extra_install_command("tesseract").startswith('uv tool install "rga-ocr[tesseract]"')
+    # started through the opt link, the prefix is the stable one already
+    monkeypatch.setattr(sc.sys, "prefix", str(opt / "libexec"))
+    monkeypatch.setattr(sc.sys, "executable", stable)
+    assert sc.under_homebrew() and sc.adapter_python() == stable
+    # the same directory names elsewhere are no Homebrew
+    for other in (tmp_path / "x" / "libexec", tmp_path / "opt" / "tool" / "libexec",
+                  tmp_path / "venvs" / "rga-ocr"):
+        monkeypatch.setattr(sc.sys, "prefix", str(other))
+        assert not sc.under_homebrew()
+        assert sc.adapter_python() == stable                        # falls back to sys.executable
 
 
 def test_printed_paths_are_literal_words(monkeypatch):
