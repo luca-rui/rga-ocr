@@ -79,14 +79,16 @@ def test_warm_run(tool, tmp_path):
     with open(t.rga_config, "w", encoding="utf-8") as f:
         json.dump(spy_config(), f, indent=2)
     log = os.path.join(t.root, "adapter-calls")
+    os.makedirs(log)
     env = {"ADAPTER_SPY_LOG": log}
 
     def calls():
-        try:
-            with open(log, encoding="utf-8") as f:
-                return [line.split("\t", 1) for line in f.read().splitlines()]
-        except FileNotFoundError:
-            return []
+        # one file per adapter call, see spy_adapter.py
+        found = []
+        for name in os.listdir(log):
+            with open(os.path.join(log, name), encoding="utf-8") as f:
+                found.append(f.read().rstrip("\n").split("\t", 1))
+        return sorted(found)
 
     cold = t.search(env=env)
     assert cold.code == 0, cold.err
@@ -98,7 +100,8 @@ def test_warm_run(tool, tmp_path):
     assert warm.code == 0, warm.err
     # rg prints files in the order its threads finish them
     assert sorted(warm.out.splitlines()) == sorted(cold.out.splitlines())
-    assert calls() == first, "the warm run started adapters: %r" % calls()[len(first):]
+    again = calls()
+    assert again == first, "the warm run started adapters: %r" % [c for c in again if c not in first]
     assert clean_err(warm), warm.err
 
 
