@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # the Python dependencies are open ">=" floors without a lock file, so
+  # only the pinned actions need updates
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

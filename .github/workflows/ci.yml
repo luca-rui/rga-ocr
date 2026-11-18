@@ -50,9 +50,9 @@ jobs:
       RGA_OCR_ENGINE: ${{ matrix.engine }}
       TESSDATA_PREFIX: ${{ github.workspace }}/.tessdata
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: pip
@@ -79,7 +79,24 @@ jobs:
 
       - name: Install ripgrep, pandoc, poppler (Windows)
         if: runner.os == 'Windows'
-        run: choco install -y --no-progress ripgrep pandoc poppler
+        shell: pwsh
+        run: |
+          # choco exits 0 even when its feed fails for one package (seen
+          # 2026-11-18: 504 for poppler), so check what is installed and
+          # retry once
+          $pkgs = 'ripgrep', 'pandoc', 'poppler'
+          foreach ($attempt in 1..2) {
+            choco install -y --no-progress @pkgs
+            $have = choco list --limit-output | ForEach-Object { ($_ -split '\|')[0] }
+            $missing = @($pkgs | Where-Object { $_ -notin $have })
+            if ($missing.Count -eq 0) { break }
+            Write-Host "attempt ${attempt}: not installed: $($missing -join ', ')"
+            if ($attempt -eq 1) { Start-Sleep -Seconds 20 }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Error "choco did not install: $($missing -join ', ')"
+            exit 1
+          }
 
       - name: Install ripgrep-all from its release archive (Windows)
         if: runner.os == 'Windows'
@@ -94,7 +111,7 @@ jobs:
 
       - name: Cache Tesseract language files
         if: matrix.engine == 'tesseract'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .tessdata
           key: tessdata-fast-eng-deu
@@ -125,6 +142,11 @@ jobs:
           rga-ocr setup --apply
           rga --rga-list-adapters | sed -n '1,8p'   # sed drains stdin; head would SIGPIPE rga
 
+      - name: The installed tools extract text
+        # default shell, the same as the tests: Git Bash on Windows would
+        # resolve the pdftotext that Git ships instead of poppler's
+        run: python tools/check_tools.py
+
       - name: Tests
         run: python -m pytest -q
 
@@ -132,9 +154,9 @@ jobs:
     name: build / sdist and wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -164,7 +186,7 @@ jobs:
           /tmp/clean/bin/python -I tests/make_fixtures.py /tmp/fx
           /tmp/clean/bin/python -I -X utf8 -m rga_ocr.adapter pdf textlayer.pdf < /tmp/fx/textlayer.pdf | grep -c "Wartungsvertrag Kesselanlage"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
