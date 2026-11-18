@@ -85,7 +85,7 @@ def clean_err(r):
 
 def spy_config():
     """The suite's rga config with every adapter behind tests/spy_adapter.py,
-    which logs each call to the file named by ADAPTER_SPY_LOG."""
+    which logs each call to a file in the directory named by ADAPTER_SPY_LOG."""
     cfg = rga_config()
     spy = os.path.join(HERE, "spy_adapter.py")
     for a in cfg["custom_adapters"]:
