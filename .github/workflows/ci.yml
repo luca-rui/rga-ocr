@@ -181,11 +181,13 @@ jobs:
           rg --version | head -1
           pandoc --version | head -1
           rga-ocr --version
-          rga-ocr --engines
           # dry run exits 1 while the rga config lacks the adapters; --apply
           # writes them, warms the engine and checks rga lists them
           rga-ocr setup || true
           rga-ocr setup --apply
+          # after setup: on the auto leg no engine works before --apply has
+          # fetched the language files, and --engines then exits 1
+          rga-ocr --engines
           rga --rga-list-adapters | sed -n '1,8p'   # sed drains stdin; head would SIGPIPE rga
 
       - name: The installed tools extract text

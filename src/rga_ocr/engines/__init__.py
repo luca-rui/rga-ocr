@@ -15,7 +15,9 @@ Engine protocol (subclass Engine, module attribute ENGINE = the class):
                              platform, importlib.util.find_spec, language data
                              present. Never import the engine or load models.
   lang_tag(langs)            classmethod -> engine-specific language id used in
-                             the cache directory name; a pure table lookup
+                             the cache directory name: what the engine will
+                             really recognise with. Cheap. Called only
+                             after available(langs) said yes.
   __init__(langs)            BCP 47 tags, [] = engine default; loads the engine
   recognize(img)             -> list of (top, x, height, text), all but text
                              normalised to 0..1 from the image's top-left
@@ -86,8 +88,8 @@ def sanitize(tag):
 
 
 def parse_langs(value):
-    """'de-DE, en-US' -> ['de-DE', 'en-US']; None or '' -> []."""
-    return [s.strip() for s in (value or "").split(",") if s.strip()]
+    """'de-DE, en-US' or 'de-DE en-US' -> ['de-DE', 'en-US']; None or '' -> []."""
+    return [s for s in re.split(r"[,\s]+", value or "") if s]
 
 
 def module_present(*names):
@@ -105,13 +107,28 @@ def auto_order():
     return AUTO_ORDER.get(sys.platform, AUTO_ORDER_DEFAULT)
 
 
-def _external():
-    """Engines registered by other packages: {name: entry point}."""
+# parse_cache_tag() splits a cache directory name at the first "-", so an
+# engine name must not contain one
+PLUGIN_NAME_RE = re.compile(r"[a-z0-9_]+")
+
+
+def _entry_points():
     try:
-        eps = entry_points(group=ENTRY_POINT_GROUP)
+        return list(entry_points(group=ENTRY_POINT_GROUP))
     except TypeError:                      # Python < 3.10 API shape
-        eps = entry_points().get(ENTRY_POINT_GROUP, [])
-    return {ep.name: ep for ep in eps}
+        return list(entry_points().get(ENTRY_POINT_GROUP, []))
+
+
+def _external():
+    """Engines registered by other packages: {name: entry point}. Names that
+    cannot be used are left out without a word; rejected_plugins() lists
+    them for the CLI, which warns once per run."""
+    return {ep.name: ep for ep in _entry_points() if PLUGIN_NAME_RE.fullmatch(ep.name)}
+
+
+def rejected_plugins():
+    """Registered engine names outside PLUGIN_NAME_RE, sorted."""
+    return sorted({ep.name for ep in _entry_points() if not PLUGIN_NAME_RE.fullmatch(ep.name)})
 
 
 def names():
@@ -144,6 +161,7 @@ def resolve(name, langs):
     """The Engine subclass to use: a named one if it is available, or for
     "auto" the first available engine in this platform's order."""
     langs = list(langs)
+    name = (name or "").strip()
     if name and name != "auto":
         cls = load(name)
         ok, reason = cls.available(langs)

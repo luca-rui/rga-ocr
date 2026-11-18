@@ -64,7 +64,7 @@ as `{"type":"name"}` events with `--json`.
 
 The user's configuration file: `~/.config/rga-ocr/config` on macOS and
 Linux (`$XDG_CONFIG_HOME` honoured), `%APPDATA%\rga-ocr\config` on
-Windows. `key = value` lines, `#` comments, comma-separated lists. Each key
+Windows. `key = value` lines, `#` comments, comma-separated lists (`lang` takes blanks too). Each key
 maps to an environment variable `RGA_OCR_<KEY>`. Precedence: built-in
 default, profile, environment, command-line flag. Keys: `engine`, `lang`,
 `exclude`, `case`, `name_blank`, `name_blank_optional`, `snippet`,

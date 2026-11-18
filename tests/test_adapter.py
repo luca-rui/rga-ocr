@@ -148,3 +148,20 @@ def test_adapter_process_exits_zero_on_unknown_mode():
     assert r.returncode == 0
     assert r.stdout == b""
     assert b"unknown mode" in r.stderr
+
+
+def test_winocr_cache_tag_names_the_pack_that_does_the_work(monkeypatch):
+    from rga_ocr.engines import winocr as w
+    monkeypatch.setattr(w, "_installed", lambda: ["en-US", "de-DE"])
+    assert w.ENGINE.lang_tag(["de"]) == "de-DE"
+    assert w.ENGINE.lang_tag(["de-AT", "en"]) == "de-DE"
+    assert w.ENGINE.lang_tag(["fr", "en"]) == "en-US"
+    assert w.ENGINE.lang_tag(["fr"]) == "fr"                 # no pack: the requested tags
+    assert w.ENGINE.lang_tag([]) == "auto"
+    assert engines.cache_tag(w.ENGINE, ["de", "en"], force=True) == "winocr-de-DE-force"
+    assert engines.parse_cache_tag("winocr-de-DE-force") == ("winocr", "de-DE", True)
+
+    def broken():
+        raise OSError("no WinRT")
+    monkeypatch.setattr(w, "_installed", broken)
+    assert w.ENGINE.lang_tag(["de", "en"]) == "de_en"

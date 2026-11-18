@@ -40,6 +40,24 @@ All notable changes to this project are documented here. The format follows
   (`-ir`, `-rX`, `-il`) is refused with exit 2. It used to reach rg,
   where `-r` means replace.
 - `--generate` is refused like rg's other output-replacing flags.
+- `rga-ocr --engines` exits 1 when the configured engine does not work
+  here, and with `engine = auto` when no engine does. It used to exit 0
+  always.
+- Profile: a `#` starts a comment only at the start of a line or after a
+  blank, so a value such as `exclude = build#2` keeps its `#`. A comment
+  that follows a value without a blank (`engine = vision#note`) is now
+  part of the value.
+- `lang` takes tags separated by commas or blanks (`de-DE en-US`).
+- The profile written by `--init-config` carries `cache_dir` as a comment,
+  so the platform default stays in charge until you set one.
+- winocr names its cache after the language pack that does the work, not
+  after the languages asked for: `lang = de, en` with only `en-US`
+  installed is cached as `winocr-en-US`. A winocr cache that 0.1.x wrote
+  under another name, for example `winocr-de_en`, is not read any more.
+  `rga-ocr --cache-info` lists the directories and `rga-ocr --clear-cache
+  <name>` removes one.
+- An engine plugin whose name holds anything but `a-z`, `0-9` and `_` is
+  ignored with a warning; its cache directory name could not be read back.
 
 ### Fixed
 
@@ -52,6 +70,12 @@ All notable changes to this project are documented here. The format follows
   `--hostname-bin`, `--hyperlink-format`, the separator flags) no longer lose their value to the QUERY or DIR
   argument.
 - rg's output-format flags are refused in their `--flag=VALUE` form too.
+- An `RGA_OCR_` variable that is no setting gets a warning instead of
+  silence, from searches and from `setup`.
+- Blanks around an engine name (`RGA_OCR_ENGINE="vision "`) are dropped;
+  `--engines` accepted such a name and the search refused it.
+- `rga-ocr setup` no longer removes a `,` before `}` or `]` inside a
+  string of rga's config.
 
 ## [0.1.1] - 2026-11-18
 
