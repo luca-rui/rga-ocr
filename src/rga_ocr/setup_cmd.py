@@ -200,6 +200,41 @@ def under_uv_tool():
     return parts[-3:-1] == ["uv", "tools"]
 
 
+def homebrew_prefix():
+    """The environment's path through Homebrew's `opt` link, or None
+    outside a Homebrew formula. A formula keeps its virtualenv in
+    <prefix>/Cellar/<formula>/<version>/libexec, and that directory is
+    gone after `brew upgrade`; <prefix>/opt/<formula> always points at
+    the installed version."""
+    parts = sys.prefix.split(os.sep)
+    if len(parts) >= 5 and parts[-1] == "libexec" and parts[-4] == "Cellar":
+        return os.sep.join(parts[:-4] + ["opt", parts[-3], "libexec"])
+    if (len(parts) >= 4 and parts[-1] == "libexec" and parts[-3] == "opt"
+            and os.path.isdir(os.sep.join(parts[:-3] + ["Cellar", parts[-2]]))):
+        return sys.prefix
+    return None
+
+
+def under_homebrew():
+    return homebrew_prefix() is not None
+
+
+def homebrew_formula():
+    """The formula this environment belongs to, as `brew` names it."""
+    return os.path.basename(os.path.dirname(homebrew_prefix()))
+
+
+def adapter_python():
+    """The interpreter rga starts the adapters with: this one, by a path
+    that outlives an upgrade of the package where there is one."""
+    opt = homebrew_prefix()
+    if opt:
+        stable = os.path.join(opt, "bin", os.path.basename(sys.executable))
+        if os.path.isfile(stable):
+            return stable
+    return sys.executable
+
+
 def python_command():
     """This interpreter as the first word of a command line. On Windows a
     bare path runs in cmd and PowerShell alike; a path that needs quotes
@@ -223,7 +258,22 @@ def extra_install_command(extra):
         return f'pipx install --force "{spec}"'
     if under_uv_tool():
         return f'uv tool install --force "{spec}"'
+    if under_homebrew():
+        # one line that is safe to paste: no comment, since zsh on macOS
+        # does not treat "#" as one at the prompt
+        # The PyPI install comes first: if pipx is missing, the line stops
+        # there and the formula stays.
+        return f'pipx install "{spec}" && brew uninstall {homebrew_formula()} && {PROG} setup --apply'
     return f'{python_command()} -m pip install "{spec}"'
+
+
+def todo_extra(out, extra, note=""):
+    """The TODO line that installs an engine's extra."""
+    if under_homebrew():
+        out.line("the Homebrew formula carries the vision engine only; "
+                 "another engine needs the PyPI install in its place")
+        note = ""
+    out.todo(extra_install_command(extra) + note)
 
 
 def uninstall_command():
@@ -231,6 +281,8 @@ def uninstall_command():
         return f"pipx uninstall {PROG}"
     if under_uv_tool():
         return f"uv tool uninstall {PROG}"
+    if under_homebrew():
+        return f"brew uninstall {homebrew_formula()}"
     return f"{python_command()} -m pip uninstall {PROG}"
 
 
@@ -248,7 +300,7 @@ def check_engine(out, name, langs, apply):
             except engines.EngineError:
                 return False
             if not cls.installed():
-                out.todo(extra_install_command(cls.extra))
+                todo_extra(out, cls.extra)
                 return False
             return _engine_fixes(out, cls, langs, apply)
         # auto: the first engine of this platform's order whose Python side
@@ -261,7 +313,7 @@ def check_engine(out, name, langs, apply):
             if cls.installed():
                 out.line(f"auto will pick {n} once it is ready: {cls.available(langs)[1]}")
                 return _engine_fixes(out, cls, langs, apply)
-        out.todo(extra_install_command("rapidocr") + "   # the portable engine")
+        todo_extra(out, "rapidocr", "   # the portable engine")
         return False
     out.line(f"configured: {name} -> {cls.name} ({engines.cache_tag(cls, langs)})")
     return _engine_fixes(out, cls, langs, apply)
@@ -377,7 +429,7 @@ def load_jsonc(text):
 
 def adapter_entries(binary=None, args=None):
     """The three custom adapter entries, pointing at this interpreter."""
-    binary = binary or sys.executable
+    binary = binary or adapter_python()
     args = list(ADAPTER_ARGS if args is None else args)
 
     def entry(name, mode, desc, ext, mime, hint, version=1):
@@ -443,7 +495,7 @@ def check_rga_config(out, apply, rga_config=None):
     before = [a.get("name") for a in existing.get("custom_adapters") or []]
     out.line(f"adapters now: {', '.join(before) or '(none)'}")
     out.line(f"adapters after: {', '.join(a['name'] for a in merged['custom_adapters'])}")
-    out.line(f"adapter command: {sys.executable} {' '.join(ADAPTER_ARGS)} <mode> <file>")
+    out.line(f"adapter command: {adapter_python()} {' '.join(ADAPTER_ARGS)} <mode> <file>")
     unchanged = existing.get("custom_adapters") == merged["custom_adapters"]
     if unchanged:
         out.line("up to date")

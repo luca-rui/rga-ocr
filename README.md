@@ -114,6 +114,8 @@ per engine and language, so switching engines never serves stale text.
    the tested release (0.10.10, on Windows 0.10.9) gets a warning, not an
    error. `rga-preproc` has to be on PATH next to `rga`. In an
    environment made by `uv tool install`, the install hints use `uv tool`.
+   Inside a Homebrew formula, `setup` writes the adapter command with
+   Homebrew's `opt` path, which stays valid across `brew upgrade`.
 
 `rga-ocr --init-config` writes a commented profile.
 
