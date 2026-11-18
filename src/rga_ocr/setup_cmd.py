@@ -7,8 +7,8 @@ entries into rga's config) and prints the rest for the user to run.
 --remove is the way back and no dry run: it takes the entries out of
 rga's config at once and prints commands for everything else.
 
-Sections: tools on PATH, the OCR engine, the ripgrep-all config, a
-verification, and hints for leftovers from the rga-vision days.
+Sections: tools on PATH, the OCR engine, the ripgrep-all config and a
+verification.
 """
 
 import json
@@ -20,14 +20,13 @@ import shutil
 import subprocess
 import sys
 
-from rga_ocr import ENV_PREFIX, LEGACY_ENV_PREFIX, LEGACY_PROG, PROG, engines, paths
+from rga_ocr import PROG, engines, paths
 
 RGA_RELEASES = "https://github.com/phiresky/ripgrep-all/releases/download"
 
 ADAPTER_MODULE = "rga_ocr.adapter"
 ADAPTER_ARGS = ["-I", "-X", "utf8", "-m", ADAPTER_MODULE]
 ADAPTER_NAMES = ("ocrpdf", "ocrimg", "officexml")
-LEGACY_ADAPTER_NAMES = ("visionpdf", "visionimg")
 
 IMAGE_EXT = ["jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "webp", "gif", "bmp"]
 IMAGE_MIME = ["image/jpeg", "image/png", "image/heic", "image/heif", "image/tiff",
@@ -397,10 +396,10 @@ def adapter_entries(binary=None, args=None):
 
 
 def merge_config(existing, entries):
-    """existing (parsed config or {}) with our entries first, legacy
-    rga-vision entries dropped, every other custom adapter kept."""
+    """existing (parsed config or {}) with our entries first, every other
+    custom adapter kept."""
     cfg = dict(existing)
-    drop = {e["name"] for e in entries} | set(LEGACY_ADAPTER_NAMES)
+    drop = {e["name"] for e in entries}
     kept = [a for a in cfg.get("custom_adapters") or [] if a.get("name") not in drop]
     cfg["custom_adapters"] = list(entries) + kept
     return cfg
@@ -442,12 +441,9 @@ def check_rga_config(out, apply, rga_config=None):
     entries = adapter_entries()
     merged = merge_config(existing, entries)
     before = [a.get("name") for a in existing.get("custom_adapters") or []]
-    legacy = [n for n in before if n in LEGACY_ADAPTER_NAMES]
     out.line(f"adapters now: {', '.join(before) or '(none)'}")
     out.line(f"adapters after: {', '.join(a['name'] for a in merged['custom_adapters'])}")
     out.line(f"adapter command: {sys.executable} {' '.join(ADAPTER_ARGS)} <mode> <file>")
-    if legacy:
-        out.line(f"legacy entries dropped: {', '.join(legacy)}")
     unchanged = existing.get("custom_adapters") == merged["custom_adapters"]
     if unchanged:
         out.line("up to date")
@@ -468,9 +464,9 @@ def check_rga_config(out, apply, rga_config=None):
 
 
 def remove_adapters(existing):
-    """(config without our entries, names taken out). Legacy rga-vision
-    entries go too; every other custom adapter stays."""
-    ours = set(ADAPTER_NAMES) | set(LEGACY_ADAPTER_NAMES)
+    """(config without our entries, names taken out). Every other
+    custom adapter stays."""
+    ours = set(ADAPTER_NAMES)
     cfg = dict(existing)
     adapters = cfg.get("custom_adapters") or []
     gone = [a.get("name") for a in adapters if a.get("name") in ours]
@@ -567,35 +563,6 @@ def verify(out, apply, rga_config=None):
     return True
 
 
-# --- migration -------------------------------------------------------------
-
-def migration_hints(out, profile):
-    hints = []
-    old_env = sorted(k for k in os.environ if k.startswith(LEGACY_ENV_PREFIX))
-    if old_env:
-        hints.append(f"{', '.join(old_env)} set; the variables are called {ENV_PREFIX}<KEY> now")
-    old_profile = os.path.join(os.path.dirname(os.path.dirname(profile)), LEGACY_PROG, "config")
-    if os.path.isfile(old_profile) and not os.path.exists(profile):
-        if sys.platform == "win32":
-            mv = f'New-Item -ItemType Directory -Force "{os.path.dirname(profile)}"; Move-Item "{old_profile}" "{profile}"'
-        else:
-            mv = f'mkdir -p "{os.path.dirname(profile)}" && mv "{old_profile}" "{profile}"'
-        hints.append(f"move the profile: {mv}")
-    old_cache = legacy_cache_dir()
-    if old_cache and os.path.isdir(old_cache):
-        rm = "Remove-Item -Recurse" if sys.platform == "win32" else "rm -rf"
-        hints.append(f"the old cache is no longer read: {rm} \"{old_cache}\"")
-    if hints:
-        out.section("leftovers from rga-vision")
-        for h in hints:
-            out.todo(h)
-
-
-def legacy_cache_dir():
-    from platformdirs import PlatformDirs
-    return PlatformDirs(LEGACY_PROG, appauthor=False, roaming=True).user_cache_dir
-
-
 # --- driver ----------------------------------------------------------------
 
 class Out:
@@ -677,7 +644,6 @@ def main(argv, config_path, settings_from, rga_config=None):
     ok_engine = check_engine(out, name, langs, o["apply"])
     ok_cfg = check_rga_config(out, o["apply"], rga_config)
     ok_verify = verify(out, o["apply"] and ok_cfg, rga_config)
-    migration_hints(out, profile)
     print()
     if ok_tools and ok_engine and ok_cfg and (ok_verify or not o["apply"]):
         print("ready" if o["apply"] else "nothing missing; run with --apply to write the rga config")

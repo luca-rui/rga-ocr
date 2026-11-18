@@ -134,7 +134,7 @@ class Tool:
         import json
         with open(self.rga_config, "w", encoding="utf-8") as f:
             json.dump(rga_config(), f, indent=2)
-        # drop every RGA_* variable: the tool's own and legacy ones it would warn about
+        # drop every RGA_* variable: the tool's own and unknown ones it would warn about
         env = {k: v for k, v in os.environ.items() if not k.startswith("RGA_")}
         env[NAMES["env_prefix"] + "ENGINE"] = ENGINE
         env[NAMES["env_prefix"] + "CACHE_DIR"] = self.cache
