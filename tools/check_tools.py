@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """CI check: the installed tools extract text, not merely exist on PATH.
 
-Builds the test fixtures and runs pdftotext, rga's poppler adapter and
-rga's pandoc adapter on them. Run it from the same shell as the tests, so
-both resolve the same binaries: under Git Bash on Windows, PATH puts the
-pdftotext that Git ships ahead of poppler's.
+Builds the test fixtures and runs rga's pandoc adapter on them. Run it
+from the same shell as the tests, so both resolve the same binaries: Git
+Bash on Windows puts Git's own tools ahead of the installed ones on PATH.
 """
 import os
 import shutil
@@ -23,7 +22,7 @@ def run(cmd):
 
 def main():
     failed = []
-    for tool in ("rg", "rga", "rga-preproc", "pandoc", "pdftotext"):
+    for tool in ("rg", "rga", "rga-preproc", "pandoc"):
         path = shutil.which(tool)
         print(f"{tool}: {path or 'NOT FOUND'}")
         if not path:
@@ -38,11 +37,8 @@ def main():
         if code:
             print(err, file=sys.stderr)
             return 1
-        pdf = os.path.join(fx, "textlayer.pdf")
         docx = os.path.join(fx, "vertrag.docx")
         checks = [
-            ("pdftotext", ["pdftotext", pdf, "-"]),
-            ("rga poppler adapter", ["rga", "--rga-cache-path=" + cache, "--rga-adapters=poppler", NEEDLE, pdf]),
             ("rga pandoc adapter", ["rga", "--rga-cache-path=" + cache, "--rga-adapters=pandoc", NEEDLE, docx]),
         ]
         for label, cmd in checks:

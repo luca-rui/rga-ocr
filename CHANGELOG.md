@@ -6,7 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `--no-ocr` no longer misses PDFs silently. It used rga's `poppler`
+  adapter, which runs whatever `pdftotext` is first on PATH. On Windows
+  that can be the xpdf build that Git for Windows ships: it rejects the
+  arguments, rga skips the file, and the search reports no hit.
+
+### Changed
+
+- `--no-ocr` reads the PDF text layer through the `ocrpdf` adapter
+  (pypdfium2), the same code the default mode uses for pages that have
+  one. `pdftotext` and poppler are no longer used, checked by
+  `rga-ocr setup` or named in the install hints.
+- In `--no-ocr` mode a phrase wrapped across two lines of a paragraph now
+  matches, as it does in the default mode.
+- `--no-ocr` wins when `--force-ocr` is given too.
+- The status line of a `--no-ocr` run counts "files read" instead of
+  "files OCR'd".
+- The `none` cache is filled again on the first `--no-ocr` run; entries
+  written by the `poppler` adapter are no longer read
+  (`rga-ocr --clear-cache none` removes them).
 
 ## [0.1.1] - 2026-11-18
 

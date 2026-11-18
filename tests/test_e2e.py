@@ -139,15 +139,24 @@ def test_names_only_and_no_names(tool):
 # ------------------------------------------------------------- OCR switches
 
 def test_no_ocr(tool):
-    import shutil
-    if not shutil.which("pdftotext"):
-        pytest.skip("pdftotext not on PATH")
-    # pdftotext keeps the layout line break inside the wrapped block, so a
-    # single word is the honest query here (see README, Limits).
-    r = tool.run("--no-ocr", "Kesselanlage", ".")
-    assert grep(r.out, r"textlayer\.pdf:[0-9]+:Page 2:"), r.out
+    # the text layer comes from the ocrpdf adapter, which joins the lines of
+    # a paragraph: the phrase wrapped across two lines matches here too
+    r = tool.run("--no-ocr", NEEDLE, ".")
+    assert grep(r.out, r"textlayer\.pdf:[0-9]+:Page 2:.*Wartungsvertrag Kesselanlage"), r.out
     assert "scan.pdf" not in r.out, r.out
     assert "photo.jpg" not in r.out, r.out
+    assert os.path.isdir(os.path.join(tool.cache, "none"))
+    # --no-ocr wins over --force-ocr; --no-cache, so the adapter runs again
+    r = tool.run("--no-ocr", "--force-ocr", "--no-cache", NEEDLE, ".")
+    assert grep(r.out, r"textlayer\.pdf:[0-9]+:Page 2:"), r.out
+    assert "scan.pdf" not in r.out, r.out
+
+
+def test_no_ocr_set_in_the_environment_does_not_reach_an_ocr_run(tool):
+    # an exported RGA_OCR_NO_OCR would otherwise cache scans as empty text
+    # under the engine's cache directory
+    r = tool.run("--no-cache", NEEDLE, ".", env={"RGA_OCR_NO_OCR": "1"})
+    assert grep(r.out, "^" + rel("sub", "scan.pdf") + ":"), r.out
 
 
 def test_force_ocr(tool):
@@ -209,6 +218,15 @@ def render(raw):
 
 
 pty_only = pytest.mark.skipif(IS_WINDOWS, reason="pty-based check")
+
+
+@pty_only
+def test_status_line_of_a_no_ocr_run_does_not_claim_ocr(tool):
+    code, raw = tool.run_pty("--no-ocr", "--no-cache", NEEDLE, ".")
+    assert code == 0
+    out = render(raw)
+    assert grep(out, r"^searched [0-9]+\.[0-9] s · [0-9]+ hits? · [0-9]+ files? read$"), out
+    assert "OCR'd" not in raw.decode("utf-8", "replace")
 
 
 @pty_only

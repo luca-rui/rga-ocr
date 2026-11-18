@@ -95,3 +95,4 @@ line.
 The extractable text of a PDF page, read through pypdfium2. A page whose
 text layer has fewer than 20 characters (`RGA_OCR_MIN_TEXT_CHARS`) is
 rendered and OCR'd; `--force-ocr` OCRs every page and appends the result.
+With `--no-ocr` the text layer is all that is read: no page is rendered.
