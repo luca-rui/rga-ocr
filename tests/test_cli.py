@@ -71,8 +71,43 @@ def test_rga_config_flag():
     assert cli.rga_config_flag(["--rga-no-cache", "--rga-config-file=/x/c.jsonc"]) == "/x/c.jsonc"
 
 
+@pytest.mark.parametrize("flag,key,value", [
+    ("--snippet", "snippet", "40"), ("--name-blank", "name_blank", "strict"),
+    ("--engine", "engine", "tesseract"), ("--lang", "lang", "de-DE,en-US"),
+    ("--exclude", "exclude", "a,b"), ("--config", None, "/x/profile"),
+])
+def test_value_flags_take_both_forms(flag, key, value):
+    for argv in ([flag, value, "q", "dir"], [flag + "=" + value, "q", "dir"]):
+        o = cli.parse_args(argv)
+        assert (o["config"] if key is None else o["flags"][key]) == value, argv
+        assert (o["query"], o["root"], o["pass"]) == ("q", "dir", []), argv
+    # the value may hold a "=" itself, and may be empty
+    assert cli.parse_args(["--exclude=a=b", "q"])["flags"]["exclude"] == "a=b"
+    assert cli.parse_args(["--exclude=", "q"])["flags"]["exclude"] == ""
+
+
+@pytest.mark.parametrize("flag", ["-e", "--regexp", "--type-add", "--type-clear", "--ignore-file", "-g",
+                                  "--context-separator", "--maxdepth", "--hostname-bin"])
+def test_rg_value_flags_keep_their_value(flag):
+    # the value must not turn into the query or the directory
+    o = cli.parse_args([flag, "VALUE", "q", "dir"])
+    assert (o["query"], o["root"], o["pass"]) == ("q", "dir", [flag, "VALUE"])
+    if flag.startswith("--"):
+        o = cli.parse_args([flag + "=VALUE", "q", "dir"])
+        assert (o["query"], o["root"], o["pass"]) == ("q", "dir", [flag + "=VALUE"])
+
+
+def test_replace_passes_through_with_json_only():
+    for argv in (["--json", "--replace", "X", "q"], ["--replace=X", "--json", "q"]):
+        o = cli.parse_args(argv)
+        assert o["query"] == "q" and o["pass"][0].startswith("--replace"), argv
+
+
 @pytest.mark.parametrize("args,msg", [
     (["--snippet"], "--snippet needs a value"),
+    (["--replace", "X", "q", "."], "--replace needs --json"),
+    (["--replace=X", "q", "."], "--replace needs --json"),
+    (["--count=x", "q", "."], "--count is not supported"),
     (["a", "b", "c"], "too many arguments: c"),
     (["-r", "(", "."], "bad regex for the name pass"),
     (["-l", "x", "."], "-l is not supported: the content pass reads rg's JSON output"),
@@ -164,3 +199,28 @@ def test_prepare_cache_unsupported_sqlite(tmp_path, monkeypatch):
     assert cli.prepare_cache(d) is None
     assert os.path.isdir(d)
     assert os.listdir(d) == []
+
+
+def test_rga_value_flags_reach_rga_in_the_equals_form():
+    # rga 0.10.10 rejects "--rga-cache-path DIR"
+    o = cli.parse_args(["--rga-cache-path", "DIR", "q", "dir"])
+    assert (o["query"], o["root"], o["pass"]) == ("q", "dir", ["--rga-cache-path=DIR"])
+    o = cli.parse_args(["--rga-adapters=+mail", "q"])
+    assert o["pass"] == ["--rga-adapters=+mail"]
+
+
+@pytest.mark.parametrize("argv, word", [
+    (["-rX", "q"], "--replace TEXT"), (["-ir", "q"], "--replace TEXT"), (["-Ur", "X", "q"], "--replace TEXT"),
+    (["-il", "q"], "-l (in -il) is not supported"), (["-Uc", "q"], "-c (in -Uc) is not supported"),
+    (["--generate", "man", "q"], "--generate is not supported"), (["--generate=man", "q"], "--generate is not supported"),
+])
+def test_bundled_short_flags_cannot_smuggle_refused_ones(argv, word, capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.parse_args(argv)
+    assert e.value.code == 2
+    assert word in capsys.readouterr().err
+
+
+def test_bundles_and_attached_values_that_are_fine_pass_through():
+    for arg in ("-C2", "-j4", "-gr*.txt", "-tr", "-UP", "-M300"):      # an r or l inside a value is no flag
+        assert cli.parse_args([arg, "q"])["pass"] == [arg], arg
