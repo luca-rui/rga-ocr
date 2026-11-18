@@ -1,0 +1,5 @@
+graft tests
+graft tools
+graft docs
+include CHANGELOG.md CONTRIBUTING.md SECURITY.md
+global-exclude __pycache__ *.py[cod]
