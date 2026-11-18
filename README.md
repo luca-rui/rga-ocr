@@ -170,7 +170,9 @@ rga-ocr --version | -h | --help
 ```
 
 Anything else is passed to `rga`/`rg`: `-g '!*.log'`, `-t pdf`, `-C 2`,
-`-U`, `-j 4`, `-M 300`, `--rga-config-file=...`. rg's output-format flags
+`-U`, `-j 4`, `-M 300`, `--rga-config-file=...`. Value flags take
+`--flag VALUE` or `--flag=VALUE`; in front of `setup` an `--rga-` flag
+needs the `=` form. rg's output-format flags
 (`-l`, `-c`, `--count-matches`, `--files-without-match`, `--files`, `-q`)
 are refused with exit 2: the content pass reads rg's JSON events, which
 those flags replace. Use `--json` and filter the events instead.
@@ -404,8 +406,13 @@ and under a second afterwards.
 - A first argument of `setup` starts the subcommand; to search for the
   word itself write `rga-ocr -- setup PATH`.
 - `-r`, `-s`, `-i`, `--engine`, `--full` and `--json` belong to `rga-ocr`;
-  rg's `-r/--replace` and `--engine` (regex engine) cannot be reached
-  through the pass-through.
+  rg's `-r` and `--engine` (regex engine) cannot be reached through the
+  pass-through, also not bundled or with an attached value (`-ir`, `-rX`
+  exit 2). `--replace` (long form) works with `--json` only: rg
+  reports the replacement in the event next to the unchanged line, and
+  the text output prints the line.
+- `-e PATTERN` adds a pattern for the content pass. `rga-ocr` still needs
+  its QUERY argument, and the name pass uses QUERY alone.
 - rg's output-format flags (`-l`, `-c`, `--count-matches`,
   `--files-without-match`, `--files`, `-q`) are refused with exit 2; use
   `--json` and filter the events.

@@ -6,12 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- `--no-ocr` no longer misses PDFs silently. It used rga's `poppler`
-  adapter, which runs whatever `pdftotext` is first on PATH. On Windows
-  that can be the xpdf build that Git for Windows ships: it rejects the
-  arguments, rga skips the file, and the search reports no hit.
+- `--replace TEXT` is passed to rg when `--json` is given: the events
+  carry the replacement.
+- `--rga-cache-path DIR` and the other `--rga-` value flags work with a
+  separate value; `rga-ocr` hands them to rga in the `=` form rga needs.
 
 ### Changed
 
@@ -33,6 +33,25 @@ All notable changes to this project are documented here. The format follows
   now runs one leg with the core, `rapidocr` and test dependencies at
   their floor.
 - The `winrt` floors read `>=2.0.1`: there is no final 2.0.0 release.
+- `--replace` without `--json` is refused with exit 2: the text output
+  prints the matched line as it is, so the replacement was dropped
+  without a word.
+- A bundle of short flags that holds `-r` or an output-format flag
+  (`-ir`, `-rX`, `-il`) is refused with exit 2. It used to reach rg,
+  where `-r` means replace.
+- `--generate` is refused like rg's other output-replacing flags.
+
+### Fixed
+
+- `--no-ocr` no longer misses PDFs silently. It used rga's `poppler`
+  adapter, which runs whatever `pdftotext` is first on PATH. On Windows
+  that can be the xpdf build that Git for Windows ships: it rejects the
+  arguments, rga skips the file, and the search reports no hit.
+- rg flags with a separate value that `rga-ocr` did not know (`-e`,
+  `--regexp`, `--type-add`, `--type-clear`, `--ignore-file`, `--maxdepth`,
+  `--hostname-bin`, `--hyperlink-format`, the separator flags) no longer lose their value to the QUERY or DIR
+  argument.
+- rg's output-format flags are refused in their `--flag=VALUE` form too.
 
 ## [0.1.1] - 2026-11-18
 

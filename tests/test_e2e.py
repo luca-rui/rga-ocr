@@ -135,6 +135,19 @@ def test_names_only_and_no_names(tool):
     assert "notes.txt" in r.out, r.out
 
 
+def test_rg_value_flags_pass_through(tool):
+    # -e adds a pattern for the content pass; its value is not the DIR
+    r = tool.run("--no-names", "-e", "Termin offen", "kein-treffer-xyz", "notes.txt")
+    assert r.code == 0 and "Termin offen" in r.out, (r.out, r.err)
+    r = tool.run("--no-names", "--type-add", "notiz:*.txt", "-t", "notiz", NEEDLE, ".")
+    assert r.code == 0 and grep(r.out, "^" + rel("notes.txt") + ":2:"), (r.out, r.err)
+    assert ".pdf" not in r.out, r.out
+    r = tool.run("--no-names", "--json", "--replace", "ERSETZT", NEEDLE, "notes.txt")
+    events = [json.loads(l) for l in r.out.splitlines()]
+    subs = [m for e in events if e["type"] == "match" for m in e["data"]["submatches"]]
+    assert subs and all(m["replacement"]["text"] == "ERSETZT" for m in subs), r.out
+
+
 # ------------------------------------------------------------- OCR switches
 
 def test_no_ocr(tool):

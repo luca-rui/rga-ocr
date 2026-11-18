@@ -45,14 +45,21 @@ NO_OCR_ADAPTERS = ["ocrpdf", "officexml"]
 
 # rg output-format options: the content pass reads rg's JSON events, and
 # these flags replace or silence that stream, so they are refused up front
-NO_JSON_OPTS = {"-c", "--count", "--count-matches", "-l", "--files-with-matches",
+NO_JSON_OPTS = {"-c", "--count", "--count-matches", "-l", "--files-with-matches", "--generate",
                 "--files-without-match", "--files", "-q", "--quiet", "--no-json"}
+# rga-ocr's own flags that take a value, as `--flag VALUE` or `--flag=VALUE`:
+# the profile setting each one overrides (None: --config, not a setting)
+VALUE_FLAGS = {"--snippet": "snippet", "--name-blank": "name_blank", "--engine": "engine",
+               "--lang": "lang", "--exclude": "exclude", "--config": None}
 # rg / rga options that take a separate value argument (for pass-through)
 VALOPTS = set("""
--g -t -T -C -A -B -j -M -E -m -d -f --glob --iglob --type --type-not --context
---after-context --before-context --threads --max-columns --encoding --max-count
---max-depth --max-filesize --file --pre --pre-glob --color --colors --sort --sortr
---path-separator --dfa-size-limit --regex-size-limit --rga-cache-path
+-e -g -t -T -C -A -B -j -M -E -m -d -f --regexp --glob --iglob --type --type-not
+--type-add --type-clear --context --after-context --before-context --threads
+--max-columns --encoding --max-count --max-depth --maxdepth --max-filesize --file
+--ignore-file --pre --pre-glob --replace --color --colors --sort --sortr
+--path-separator --context-separator --field-context-separator
+--field-match-separator --hostname-bin --hyperlink-format
+--dfa-size-limit --regex-size-limit --rga-cache-path
 --rga-config-file --rga-adapters --rga-cache-max-blob-len
 --rga-cache-compression-level --rga-max-archive-recursion
 """.split())
@@ -136,8 +143,10 @@ usage: {PROG} [options] QUERY [PATH]        PATH defaults to .
   --config PATH          use this profile file (env {ENV_PREFIX}CONFIG)
   --version, -h, --help
 
-Anything else is passed to rga/rg (-g, -t, -C, -U, -j, -M, --rga-config-file ...),
+Value flags take --flag VALUE or --flag=VALUE; write short flags one by one (-i -r).
+Anything else is passed to rga/rg (-g, -t, -C, -U, -j, -M, -e, --rga-config-file ...),
 except rg's output-format flags (-l, -c, --files, -q ...), which are refused.
+--replace works together with --json only.
 
 profile: {{config path}}   keys: {", ".join(DEFAULTS)}
 exit status: 0 at least one hit, 1 no hit, 2 failure
@@ -481,12 +490,27 @@ def init_config(path):
 
 # ------------------------------------------------------------ arguments
 
+def check_cluster(a):
+    """Refuses a bundle of short options (-il, -rX) that would hand rg a flag
+    rga-ocr keeps away from it. Letters after a value-taking one are its value."""
+    for ch in a[1:]:
+        flag = "-" + ch
+        if flag in VALOPTS:
+            return
+        if flag in NO_JSON_OPTS:
+            warn(f"{flag} (in {a}) is not supported: the content pass reads rg's JSON output, which {flag} replaces")
+            raise SystemExit(2)
+        if ch == "r":
+            warn(f"{a}: write -r on its own for a regex query; rg's replacement is --replace TEXT with --json")
+            raise SystemExit(2)
+
+
 def parse_args(argv):
     o = {
         "flags": {}, "pass": [], "regex": False, "ocr": True, "force": False, "mail": False,
         "accurate": False, "no_exclude": False, "names": True, "contents": True, "json": False,
         "no_cache": False, "init": False, "clear_cache": False, "cache_info": False, "engines": False,
-        "dry_run": False, "config": None, "query": None, "root": ".",
+        "dry_run": False, "config": None, "query": None, "root": ".", "replace": False,
     }
     args = list(argv)
     pos = []
@@ -508,33 +532,26 @@ def parse_args(argv):
         if a == "--version":
             print(f"{PROG} {VERSION}")
             raise SystemExit(0)
-        if "=" in a and a.startswith("--"):
-            name, _, val = a.partition("=")
-            if name in ("--engine", "--lang", "--snippet", "--name-blank", "--exclude", "--config"):
-                args.insert(0, val)
-                a = name
-        if a == "-s":
+        # the name of a long option, without an attached =VALUE
+        name, eq, val = a.partition("=") if a.startswith("--") else (a, "", "")
+        if name in VALUE_FLAGS:
+            val = val if eq else take(name)
+            if VALUE_FLAGS[name] is None:
+                o["config"] = val
+            else:
+                o["flags"][VALUE_FLAGS[name]] = val
+        elif a == "-s":
             o["flags"]["case"] = "sensitive"
         elif a == "-i":
             o["flags"]["case"] = "insensitive"
         elif a == "-r":
             o["regex"] = True
-        elif a == "--snippet":
-            o["flags"]["snippet"] = take(a)
         elif a == "--full":
             o["flags"]["snippet"] = "0"
-        elif a == "--name-blank":
-            o["flags"]["name_blank"] = take(a)
         elif a == "--name-blank-optional":
             o["flags"]["name_blank_optional"] = "true"
-        elif a == "--engine":
-            o["flags"]["engine"] = take(a)
         elif a == "--engines":
             o["engines"] = True
-        elif a == "--lang":
-            o["flags"]["lang"] = take(a)
-        elif a == "--exclude":
-            o["flags"]["exclude"] = take(a)
         elif a == "--no-exclude":
             o["no_exclude"] = True
         elif a == "--no-ocr":
@@ -565,12 +582,18 @@ def parse_args(argv):
             o["cache_info"] = True
         elif a == "--dry-run":
             o["dry_run"] = True
-        elif a == "--config":
-            o["config"] = take(a)
         elif a.startswith("-") and len(a) > 1:
-            if a in NO_JSON_OPTS:
-                warn(f"{a} is not supported: the content pass reads rg's JSON output, which {a} replaces")
+            if name in NO_JSON_OPTS:
+                warn(f"{name} is not supported: the content pass reads rg's JSON output, which {name} replaces")
                 raise SystemExit(2)
+            if name == "--replace":
+                o["replace"] = True
+            if not a.startswith("--") and len(a) > 2:
+                check_cluster(a)
+            if a.startswith("--rga-") and a in VALOPTS and args:
+                # rga itself takes these values only after "="
+                o["pass"].append(a + "=" + args.pop(0))
+                continue
             o["pass"].append(a)
             if a in VALOPTS and args:
                 o["pass"].append(args.pop(0))
@@ -581,6 +604,11 @@ def parse_args(argv):
         return o
     if not pos:
         sys.stderr.write(USAGE.replace("{config path}", config_path(o["config"])))
+        raise SystemExit(2)
+    if o["replace"] and not o["json"]:
+        # rg --json reports the replacement next to the unchanged line, and
+        # the text output prints the line
+        warn("--replace needs --json: the text output shows the matched lines as they are")
         raise SystemExit(2)
     o["query"] = pos[0]
     if len(pos) > 1:
