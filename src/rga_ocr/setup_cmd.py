@@ -42,7 +42,10 @@ usage: {PROG} [--rga-config-file=F] setup [--apply] [--engine NAME] [--lang L] [
        {PROG} [--rga-config-file=F] setup --remove [--config PATH]
 
 Checks the tools on PATH, the OCR engine, and ripgrep-all's config, and
-prints what is missing with the command that installs it. --apply fetches
+prints what is missing with the command that installs it. A search needs
+no entries in rga's config: where they are missing or out of date, {PROG}
+passes its own to rga for that run. Writing them is for plain rga and for
+searches that name a config with --rga-config-file. --apply fetches
 Tesseract language files, warms the RapidOCR models and merges the three
 {PROG} adapters into rga's config; the first run keeps a .bak copy, later
 runs a timestamped one, and comments in the file are not preserved.
@@ -501,8 +504,14 @@ def check_rga_config(out, apply, rga_config=None):
         out.line("up to date")
         return True
     if not apply:
-        out.todo(f"{PROG} setup --apply   # writes the entries above; a .bak copy is kept, comments are not")
-        return False
+        cmd = f"{PROG} setup --apply   # writes the entries above; a .bak copy is kept, comments are not"
+        if rga_config:
+            # a search that names this file uses it as it is
+            out.todo(cmd)
+            return False
+        out.line(f"not written, and not needed for {PROG}: every search brings the entries along")
+        out.line(f"for plain rga: {cmd}")
+        return True
     if os.path.exists(cfg_path):
         bak = backup_path(cfg_path)
         shutil.copy(cfg_path, bak)
@@ -603,7 +612,7 @@ def verify(out, apply, rga_config=None):
         return False
     cmd = ["rga"] + ([f"--rga-config-file={rga_config}"] if rga_config else []) + ["--rga-list-adapters"]
     if not apply:
-        out.line(" ".join(cmd) + "   # the three adapters should be listed first")
+        out.line(" ".join(cmd) + "   # lists the three adapters first once the config is written")
         return True
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     listed = re.findall(r"^ - \*\*(\S+)\*\*", p.stdout, re.M)
@@ -698,7 +707,7 @@ def main(argv, config_path, settings_from, rga_config=None):
     ok_verify = verify(out, o["apply"] and ok_cfg, rga_config)
     print()
     if ok_tools and ok_engine and ok_cfg and (ok_verify or not o["apply"]):
-        print("ready" if o["apply"] else "nothing missing; run with --apply to write the rga config")
+        print("ready" if o["apply"] else "nothing missing; --apply writes the rga config, which plain rga needs")
         return 0
     print(f"{len(out.todos)} item(s) to do" if out.todos else "not ready; see above")
     return 1

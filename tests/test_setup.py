@@ -469,6 +469,16 @@ def test_backup_path_keeps_the_first_bak(tmp_path):
     assert re.fullmatch(re.escape(cfg) + r"\.\d{8}-\d{6}\.bak", sc.backup_path(cfg))
 
 
+def test_check_rga_config_does_not_ask_for_the_default_file(tmp_path, monkeypatch):
+    # a search brings the entries along, so the dry run has nothing to do
+    cfg = tmp_path / "default.jsonc"
+    monkeypatch.setattr(sc.paths, "rga_config_path", lambda: str(cfg))
+    out = sc.Out()
+    assert sc.check_rga_config(out, apply=False) is True
+    assert not out.todos and any("setup --apply" in line for line in out.lines)
+    assert not cfg.exists()
+
+
 def test_check_rga_config_writes_to_the_given_file(tmp_path, monkeypatch):
     cfg = str(tmp_path / "rga" / "config.jsonc")
     os.makedirs(os.path.dirname(cfg))

@@ -947,6 +947,44 @@ def adapter_list(o, st):
     return adapters
 
 
+def run_config(passed, run_dir):
+    """Path of an rga config written for this run, or None when rga's own
+    config will do.
+
+    rga finds the adapters through its config file, which `setup --apply`
+    writes. So that a search works without that step, and keeps working
+    after the installation moved or an upgrade changed an adapter, the run
+    gets its own config whenever rga's does not hold the three entries this
+    installation would write: a copy of rga's config with the entries put
+    in. rga's own file is never written here. None as well when the caller
+    passed --rga-config-file, or when rga's config does not parse (rga
+    reports that itself)."""
+    if rga_config_flag(passed) is not None:
+        return None
+    from rga_ocr import setup_cmd
+    existing = {}
+    try:
+        with open(paths.rga_config_path(), encoding="utf-8") as f:
+            existing = setup_cmd.load_jsonc(f.read())
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        return None
+    if not isinstance(existing, dict):
+        return None
+    entries = setup_cmd.adapter_entries()
+    names = {e["name"] for e in entries}
+    custom = existing.get("custom_adapters") or []
+    if not isinstance(custom, list) or not all(isinstance(a, dict) for a in custom):
+        return None
+    if [a for a in custom if a.get("name") in names] == entries:
+        return None
+    path = os.path.join(run_dir, "rga-config.jsonc")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(setup_cmd.merge_config(existing, entries), f, ensure_ascii=False)
+    return path
+
+
 def run_contents(o, st, printer, root, query):
     rga = shutil.which("rga")
     if not rga:
@@ -982,6 +1020,9 @@ def run_contents(o, st, printer, root, query):
             cmd.append("--rga-accurate")
         for d in st["exclude_list"]:
             cmd += ["-g", "!" + d]
+        own_config = run_config(o["pass"], run_dir)
+        if own_config:
+            cmd.append("--rga-config-file=" + own_config)
         cmd += o["pass"] + ["-e", query, "--", root]
 
         env = dict(os.environ)

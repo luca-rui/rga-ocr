@@ -39,7 +39,6 @@ Quick start on macOS with [Homebrew](https://brew.sh), which pulls `rga`,
 
 ```
 brew install luca-rui/tap/rga-ocr
-rga-ocr setup --apply
 rga-ocr "maintenance contract" ~/Documents
 ```
 
@@ -48,9 +47,12 @@ Quick start everywhere else, once `rga`, `rg` and `pandoc` are installed
 
 ```
 pipx install "rga-ocr[vision]"   # or [winocr], [rapidocr], [tesseract]
-rga-ocr setup --apply
 rga-ocr "maintenance contract" ~/Documents
 ```
+
+`rga-ocr setup` checks the installation and names what is missing. The
+`tesseract` engine needs `rga-ocr setup --apply` once, for its language
+files.
 
 pi-heif ships no wheels for Python 3.15 yet. Where `python3` is 3.15, add
 `--python python3.14` (any of 3.11 to 3.14) to the `pipx install` line.
@@ -81,7 +83,6 @@ per engine and language, so switching engines never serves stale text.
 
 ```
 brew install luca-rui/tap/rga-ocr
-rga-ocr setup --apply
 ```
 
 The formula lives in the tap
@@ -113,21 +114,29 @@ Vision engine only. For another engine use the PyPI install below instead.
    macOS: `rga-ocr[vision]`; Windows: `rga-ocr[winocr]`; several extras
    work too: `rga-ocr[vision,tesseract]`.
 
-3. Wire the adapters into rga and check everything:
+3. Check everything:
 
    ```
    rga-ocr setup            # dry run: what is missing, what --apply would write
    rga-ocr setup --apply
    ```
 
+   A search with `rga-ocr` works without `--apply`: rga finds custom
+   adapters through its `config.jsonc`, and where that file lacks the
+   three entries of this installation, or holds other ones, `rga-ocr`
+   hands rga a copy with the entries put in, for that run only. The file
+   itself is not touched. `--apply` is needed for the Tesseract language
+   files, for calling plain `rga` with these adapters, and for searches
+   that name a config with `--rga-config-file`, which is used as it is.
+
    `setup --apply` fetches Tesseract language files for the configured
    `lang`, initialises RapidOCR once, merges the three adapter entries into
    rga's `config.jsonc` (the first run keeps a `.bak` copy, later runs a
    timestamped one; comments in that file are not preserved; other custom
    adapters stay) and checks that `rga --rga-list-adapters` lists them.
-   Package installs stay commands for you to run. Re-run it after moving
-   the installation, because the entries point at the interpreter that
-   runs `rga-ocr`.
+   Package installs stay commands for you to run. For plain `rga`, re-run
+   it after moving the installation, because the entries point at the
+   interpreter that runs `rga-ocr`.
 
    `setup --engine NAME`, `--lang L` and `--config PATH` check another
    engine, language list or profile than the configured one;
@@ -146,12 +155,9 @@ Vision engine only. For another engine use the PyPI install below instead.
 ### Upgrading
 
 ```
-pipx upgrade rga-ocr        # or pip install -U in the venv
-rga-ocr setup --apply       # refreshes the adapter entries when their version changed
+pipx upgrade rga-ocr        # or pip install -U in the venv, or brew upgrade rga-ocr
+rga-ocr setup --apply       # for plain rga only: refreshes the written adapter entries
 ```
-
-With Homebrew it is `brew upgrade rga-ocr`, followed by the same
-`setup --apply` line.
 
 The cache key is the file plus the adapter `version`. The engine package
 version and the tuning variables below are not part of it, so after
@@ -382,8 +388,8 @@ what it holds; files that are not caches stay, and `cache_dir` itself is
 removed only when it is empty afterwards. A bare `--clear-cache` only lists the caches and exits 2, so a
 forgotten argument cannot wipe everything. `--dry-run` prints what would
 be removed and deletes nothing. When `adapter.py` changes the output of a
-mode, bump that adapter's `version` in `setup_cmd.py` and re-run `rga-ocr
-setup --apply`; only that adapter's cache entries are invalidated.
+mode, bump that adapter's `version` in `setup_cmd.py`; only that adapter's cache
+entries are invalidated.
 
 ## Performance
 
@@ -418,8 +424,7 @@ and under a second afterwards.
   or more characters.
 - `--no-ocr` reads the PDF text layer and nothing else: pages without one
   (scans) and images are not searched. It uses the `ocrpdf` adapter, so
-  it needs `rga-ocr setup --apply` like the default mode, and no
-  `pdftotext`.
+  it needs no `pdftotext`.
 - Multi-word matches across OCR lines rely on the paragraph grouping. Text
   spread over columns or tables may still split a phrase across output lines.
 - Files larger than rga's cache blob limit are re-processed on every run
