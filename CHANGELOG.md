@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.2] - 2026-11-19
+
 ### Added
 
 - A search works without `rga-ocr setup --apply`. Where rga's config lacks
@@ -225,7 +229,8 @@ First public release.
   per engine with `RGA_OCR_ENGINE`; GitHub Actions matrix across macOS,
   Ubuntu and Windows.
 
-[Unreleased]: https://github.com/luca-rui/rga-ocr/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/luca-rui/rga-ocr/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/luca-rui/rga-ocr/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/luca-rui/rga-ocr/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/luca-rui/rga-ocr/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/luca-rui/rga-ocr/compare/v0.1.0...v0.1.1
