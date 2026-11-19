@@ -211,7 +211,9 @@ the adapter `version`. The engine package version and the tuning variables
 below are not part of it, so after
 upgrading an engine package or changing a tuning variable, clear the
 affected cache (`rga-ocr --cache-info`, `rga-ocr --clear-cache ...`) to
-get fresh text.
+get fresh text. For one file or one folder, `rga-ocr --refresh QUERY PATH`
+drops what the cache of the current engine and language holds for PATH and
+everything below it, and reads those files again in the same run.
 
 ### Uninstalling
 
@@ -255,6 +257,7 @@ rga-ocr --version | -h | --help
   --json                 rg JSON events; name hits first as {"type":"name","path":...}
   --color WHEN           auto | always | never (default auto: colour on a terminal)
   --no-cache             do not read or write the OCR cache
+  --refresh              read the files below PATH again and store the new text
   --progress / --no-progress   status line while searching and a summary after (default on)
   --init-config          write a commented profile and exit
   --cache-info           list the caches and exit
@@ -507,7 +510,7 @@ engine whether it works here and why not.
 | Tesseract: language files missing | `rga-ocr setup --apply --engine tesseract --lang de,en` fetches them, or point `TESSDATA_PREFIX` at your own. |
 | `winocr` does not work | No OCR language pack is installed. `rga-ocr --engines` prints the `Add-WindowsCapability` command. |
 | HEIC and HEIF files are named as not read | pi-heif is missing: Python 3.15 and Windows on arm64 have no wheel yet. Install with Python 3.11 to 3.14. |
-| Text is stale after an engine upgrade or a changed tuning variable | Those are not part of the cache key. `rga-ocr --cache-info`, then `rga-ocr --clear-cache CACHE-ID`. |
+| Text is stale after an engine upgrade or a changed tuning variable | Those are not part of the cache key. `rga-ocr --cache-info`, then `rga-ocr --clear-cache CACHE-ID`, or `rga-ocr --refresh QUERY PATH` for one file or folder. |
 | `The database file is locked`, one hit missing | Two cache writes collided in ripgrep-all. Search again; everything else is cached. |
 | `searching for the word "setup"` | The setup command goes first: `rga-ocr setup --engine NAME`. |
 | The first search of a large folder takes minutes | Every scan is read once. The status line shows progress; the second search is fast. `-j N` sets how many files are read at once. |

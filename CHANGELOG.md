@@ -13,6 +13,9 @@ All notable changes to this project are documented here. The format follows
   it was found under in front. Everything after QUERY is a PATH now, so a
   query of several words without quotes ends in `no such path` with a
   hint, where it said `too many arguments` before.
+- `--refresh` reads the files below PATH again and stores the new text,
+  for one file or folder whose cached text is stale, without clearing the
+  whole cache.
 - `--color auto|always|never`. `always` keeps the highlighting on a pipe
   (`rga-ocr --color always needle . | less -R`).
 - `--rga-adapters=LIST`, `+LIST` and `-LIST` change the adapters of one

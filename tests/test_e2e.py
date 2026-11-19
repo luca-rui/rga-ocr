@@ -182,6 +182,15 @@ def test_warm_run(tool, tmp_path):
     assert again == first, "the warm run started adapters: %r" % [c for c in again if c not in first]
     assert clean_err(warm), warm.err
 
+    # --refresh reads the files below its PATH again, and only those
+    fresh = t.run("--refresh", NEEDLE, "scan.pdf", env=env)
+    assert fresh.code == 0, fresh.err
+    new = calls()
+    assert len(new) == len(first) + 1, new
+    assert sorted(mode for mode, _ in new) == ["image", "image", "office", "pdf", "pdf"], new
+    assert t.search(env=env).code == 0
+    assert calls() == new, "the run after --refresh started adapters"
+
 
 def test_rapidocr_reads_a_non_latin_script(tool, tmp_path):
     """`--lang ru` routes to the Cyrillic model, which rapidocr fetches on

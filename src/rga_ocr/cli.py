@@ -154,6 +154,7 @@ usage: {PROG} [options] QUERY [PATH ...]    PATH defaults to .
   --json                 rg JSON events; name hits first as {{"type":"name","path":...}}
   --color WHEN           auto | always | never (default auto: colour on a terminal)
   --no-cache             do not read or write the OCR cache
+  --refresh              read the files below PATH again and store the new text
   --progress / --no-progress   status line while searching and a summary after (default on)
   --init-config          write a commented profile to {{config path}} and exit
   --cache-info           list the caches (cache-id, entries, size, last added, folders) and exit
@@ -594,7 +595,7 @@ def parse_args(argv):
         "flags": {}, "pass": [], "regex": False, "ocr": True, "force": False, "mail": False,
         "accurate": False, "no_exclude": False, "names": True, "contents": True, "json": False,
         "no_cache": False, "init": False, "clear_cache": False, "cache_info": False, "engines": False,
-        "dry_run": False, "config": None, "query": None, "root": ".", "roots": ["."], "replace": False,
+        "dry_run": False, "refresh": False, "config": None, "query": None, "root": ".", "roots": ["."], "replace": False,
         "color": "auto", "adapters": None,
     }
     args = list(argv)
@@ -656,6 +657,8 @@ def parse_args(argv):
         elif a in ("--no-cache", "--rga-no-cache"):
             # rga's own flag makes every custom adapter fail (rga 0.10.10)
             o["no_cache"] = True
+        elif a == "--refresh":
+            o["refresh"] = True
         elif name == "--rga-cache-path":
             # the search sets this flag itself, and rga takes it only once:
             # the directory stands in for cache_dir, with a directory per
@@ -1085,6 +1088,26 @@ def _config_unread(why):
 ARCHIVE_ADAPTERS = ("zip", "tar", "decompress")       # rga's own; a row holds all members
 
 
+def forget_below(con, root):
+    """Remove the cache rows of root (a file, a directory, or a list of
+    them) and of everything below it, so that the run that follows reads
+    those files again (--refresh). Only the cache of this run's engine and
+    language setting is touched. Returns the number of rows removed."""
+    import sqlite3
+    if con is None:
+        return 0
+    n = 0
+    try:
+        for base in {f(r) for r in as_roots(root) for f in (os.path.abspath, os.path.realpath)}:
+            prefix = base.rstrip(os.sep) + os.sep
+            n += con.execute("delete from preproc_cache where substr(file_path, 1, ?) = ? or file_path = ?",
+                             (len(prefix), prefix, base)).rowcount
+        con.commit()
+    except sqlite3.Error:
+        pass
+    return n
+
+
 def forget_failed(con, failed, root):
     """Remove the cache rows of files the OCR engine failed on.
 
@@ -1210,6 +1233,8 @@ def run_contents(o, st, printer, root, query):
             key = engines.cache_tag(engine, langs, o["force"]) if engine else "none"
             cache = os.path.join(os.path.expanduser(st["cache_dir"]), key)
         held = prepare_cache(cache)
+        if o["refresh"] and not o["no_cache"]:
+            forget_below(held, root)
         cmd.append("--rga-cache-path=" + cache)
         if not o["regex"]:
             cmd.append("-F")
