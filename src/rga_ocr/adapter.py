@@ -16,17 +16,21 @@ Environment (set by rga-ocr from the profile, flags, or directly):
                           unset or empty: the engine's default / auto-detection
   RGA_OCR_FORCE_OCR       "1": OCR every PDF page and append to the text layer
   RGA_OCR_NO_OCR          "1": PDF text layer only, no page is rendered or
-                          OCR'd; wins over RGA_OCR_FORCE_OCR
+                          OCR'd, and no picture on a slide is read; wins over
+                          RGA_OCR_FORCE_OCR
   RGA_OCR_MIN_TEXT_CHARS  PDF page with fewer text-layer chars is OCR'd (20)
   RGA_OCR_RENDER_DPI      PDF render resolution for OCR (200)
   RGA_OCR_MAX_PIXELS      longest image side handed to the OCR engine (3000)
   RGA_OCR_PARAGRAPH_GAP   line gap, in line heights, that starts a new output line (0.7)
+  RGA_OCR_MAX_FRAMES      frames read of one multi-frame image (500)
+  RGA_OCR_MAX_OFFICE_MB   unpacked text read of one office file, in MB (256)
+  RGA_OCR_MAX_PICTURES    pictures read of one pptx or odp file (200)
   RGA_OCR_REPORT          path of a report file: one line is appended when a file
                           starts, one when it is done, and one per error (the
                           file cannot be read), retry (the OCR engine failed;
                           rga-ocr drops the file from the cache so that it is
-                          read again) or partial (some PDF pages could not be
-                          OCR'd; the rest stays cached)
+                          read again) or partial (some PDF pages or pictures
+                          on slides could not be OCR'd; the rest stays cached)
 
 Rules: never open the virtual path (archive members do not exist on disk),
 never exit non-zero (rg would abort with exit 2), never emit NUL bytes.
@@ -62,6 +66,11 @@ MAX_PIXELS = _env_num("MAX_PIXELS", 3000, int)        # longest image side hande
 PARAGRAPH_GAP = _env_num("PARAGRAPH_GAP", 0.7, float)
 MAX_FRAMES = _env_num("MAX_FRAMES", 500, int)         # frames read of one multi-frame image
 MAX_OFFICE_MB = _env_num("MAX_OFFICE_MB", 256, int)   # unpacked XML read of one office file
+MAX_PICTURES = _env_num("MAX_PICTURES", 200, int)     # pictures OCR'd of one pptx or odp
+# An image with a shorter side holds no text a reader could see (a rule, a
+# bullet, a tracking pixel), and Apple Vision raises on a side of 2 pixels.
+MIN_SIDE = 10
+MAX_PICTURE_BYTES = 64 * 1024 * 1024                  # a larger picture in a slide deck is not read
 PAGE_BREAK = "\x0c"
 
 
@@ -151,6 +160,8 @@ class EngineFailure(Exception):
     language data), not of the file. Reported as "retry", so that the file's
     empty result does not stay in the cache."""
 
+    text = ""       # what the adapter read without the engine; written out all the same
+
     def __init__(self, cause):
         super().__init__(f"{cause.__class__.__name__}: {cause}".replace("\n", " "))
 
@@ -168,6 +179,8 @@ class OCR:
             raise EngineFailure(e) from e
 
     def text(self, img):
+        if min(img.size) < MIN_SIDE:
+            return ""
         try:
             lines = self.engine.recognize(img)
         except Exception as e:  # noqa: BLE001
@@ -353,17 +366,106 @@ class _Members:
         return raw.decode("utf-8", "replace")
 
 
+_PICTURE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic", ".heif")
+
+
+class _Pictures:
+    """OCR of the pictures a slide shows (pptx, odp). A picture is read once
+    per file, however many slides show it; vector formats (emf, wmf, svg)
+    are passed over. With RGA_OCR_NO_OCR no picture is read."""
+
+    def __init__(self, z):
+        self.z = z
+        self.names = set(z.namelist())
+        self.off = os.environ.get(ENV_PREFIX + "NO_OCR") == "1"
+        self.ocr = None
+        self.down = None        # the engine did not start: no further picture is tried
+        self.done = {}
+        self.failed = []        # engine failures on single pictures
+        self.unread = 0         # pictures that could not be decoded, or are too large
+        self.capped = False
+
+    def text(self, name):
+        if self.off or self.down or name not in self.names or not name.lower().endswith(_PICTURE_EXT):
+            return ""
+        if name not in self.done:
+            if len(self.done) >= MAX_PICTURES:
+                self.capped = True
+                return ""
+            self.done[name] = self._read(name)
+        return self.done[name]
+
+    def _read(self, name):
+        if self.ocr is None:
+            try:
+                self.ocr = OCR()
+            except EngineFailure as e:
+                self.down = e
+                return ""
+        try:
+            with self.z.open(name) as f:
+                data = f.read(MAX_PICTURE_BYTES + 1)
+            if len(data) > MAX_PICTURE_BYTES:
+                raise RuntimeError("picture too large")
+            return "\n".join(t for t in self.ocr.text_of_bytes(data) if t)
+        except EngineFailure as e:
+            self.failed.append(e)
+        except Exception:  # noqa: BLE001  one broken picture must not cost the text of the file
+            self.unread += 1
+        return ""
+
+    def close(self, text):
+        """Called with the text of the whole file: notes what was left out.
+        When the engine did not start or read none of the pictures, the
+        engine is the problem: the text goes out, and the file is read again
+        by the next search."""
+        if self.capped:
+            NOTES.append(f"more than {MAX_PICTURES} pictures, the rest was not read "
+                         f"({ENV_PREFIX}MAX_PICTURES raises the limit)")
+        if self.unread:
+            NOTES.append(f"{self.unread} of {len(self.done)} pictures could not be read")
+        if self.down or self.failed:
+            if self.down or len(self.failed) + self.unread == len(self.done):
+                e = self.down or self.failed[0]
+                e.text = text
+                raise e
+            NOTES.append(f"OCR failed on {len(self.failed)} of {len(self.done)} pictures: {self.failed[0]}")
+
+
+def _with(text, *more):
+    return "\n".join(t for t in (text, *more) if t)
+
+
+def _pptx_pictures(m, names, slide):
+    """The media members slide (ppt/slides/slideN.xml) shows, in the order
+    of its relationships file."""
+    import posixpath
+    d, base = posixpath.split(slide)
+    rels = f"{d}/_rels/{base}.rels"
+    if rels not in names:
+        return []
+    found = []
+    for rel in re.findall(r"<Relationship\b[^>]*>", m.read(rels)):
+        target = re.search(r'\bTarget="([^"]*)"', rel)
+        if target and re.search(r'\bType="[^"]*/image"', rel) and 'TargetMode="External"' not in rel:
+            t = html.unescape(target.group(1))
+            found.append(t.lstrip("/") if t.startswith("/") else posixpath.normpath(posixpath.join(d, t)))
+    return found
+
+
 def mode_office(data):
     pages = []
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         m = _Members(z)
+        pictures = _Pictures(z)
         names = z.namelist()
         slides = sorted(
             (n for n in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
             key=lambda n: int(re.search(r"(\d+)\.xml$", n).group(1)))
         if slides:                                                   # pptx
             for n in slides:
-                pages.append(_strip_xml(m.read(n), ["a:p"]))
+                pages.append(_with(_strip_xml(m.read(n), ["a:p"]),
+                                   *(pictures.text(p) for p in _pptx_pictures(m, names, n))))
         elif "xl/workbook.xml" in names:                             # xlsx
             parts = []
             if "xl/sharedStrings.xml" in names:
@@ -377,15 +479,19 @@ def mode_office(data):
             raw = m.read("content.xml")
             draw_pages = re.split(r"</draw:page>", raw)
             if len(draw_pages) > 1:                                  # odp
-                for p in draw_pages:
-                    t = _strip_xml(p, ["text:p", "text:h"])
-                    if t:
-                        pages.append(t)
+                # what follows the last page is not a page; an empty slide
+                # in between is one, or the page numbers after it are off
+                for p in draw_pages[:-1]:
+                    shown = re.findall(r'<draw:image\b[^>]*\bxlink:href="([^"]*)"', p)
+                    pages.append(_with(_strip_xml(p, ["text:p", "text:h"]),
+                                       *(pictures.text(html.unescape(h).removeprefix("./")) for h in shown)))
             else:                                                    # ods
                 pages.append(_strip_xml(raw, ["text:p", "text:h", "table:table-row"]))
         else:
             raise RuntimeError("unrecognised office container")
-    return PAGE_BREAK.join(pages)
+        text = PAGE_BREAK.join(pages)
+        pictures.close(text)
+    return text
 
 
 MODES = {"pdf": mode_pdf, "image": mode_image, "office": mode_office}
@@ -434,6 +540,8 @@ def main():
             sys.stderr.write(f"{TAG}[{mode}]: {note}\n")
             report("partial", mode, path, note)
     except EngineFailure as e:
+        if e.text:
+            write_out(e.text)
         sys.stderr.write(f"{TAG}[{mode}]: {e}\n")
         report("retry", mode, path, str(e))
     except Exception as e:  # noqa: BLE001

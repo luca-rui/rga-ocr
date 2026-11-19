@@ -173,6 +173,17 @@ def test_forget_failed_drops_the_rows_of_failed_files(tmp_path):
     fill()
     cli.forget_failed(held, ["inner/scan.png"], rows[3][1])
     assert left() == [f for _a, f in rows[:3] + rows[4:]]
+    # --refresh: every row at or below the roots goes, whatever the adapter
+    fill()
+    assert cli.forget_below(held, os.path.join(root, "sub")) == 1
+    assert left() == [f for _a, f in rows[:3] + rows[4:]]
+    assert cli.forget_below(held, [rows[0][1], root + "2"]) == 2
+    assert left() == [f for _a, f in rows[1:3]]
+    assert cli.forget_below(None, root) is None    # no cache to change: the caller warns
+    # several search roots: the archive rows below each of them go
+    fill()
+    cli.forget_failed(held, ["inner/scan.png"], [root, root + "2"])
+    assert left() == [f for _a, f in rows[:3]]
     fill()
     cli.forget_failed(held, [], root)
     cli.forget_failed(None, [rows[1][1]], root)
@@ -218,7 +229,8 @@ def test_replace_passes_through_with_json_only():
     (["--replace", "X", "q", "."], "--replace needs --json"),
     (["--replace=X", "q", "."], "--replace needs --json"),
     (["--count=x", "q", "."], "--count is not supported"),
-    (["a", "b", "c"], "too many arguments: c"),
+    (["a", "b", "c"], "no such path: b, c; everything after QUERY is a PATH, so a query of several words needs quotes"),
+    (["a", "b"], "no such path: b\n"),
     (["-r", "--names-only", "(", "."], "file names are not searched: Python cannot read this regex"),
     (["-l", "x", "."], "-l is not supported: the content pass reads rg's JSON output"),
     (["--files", "."], "--files is not supported"),
@@ -544,3 +556,15 @@ def test_cache_directories_are_created_for_the_user_only(tmp_path):
         assert oct((tmp_path / "shared").stat().st_mode & 0o777) == "0o755"
     finally:
         os.umask(old)
+
+
+def test_display_path_with_several_roots(tmp_path):
+    a, b = str(tmp_path / "a"), str(tmp_path / "a" / "deep")
+    os.makedirs(b)
+    inner = os.path.join(b, ".", "scan.pdf")
+    assert cli.display_path(inner, b) == "scan.pdf"                  # one root: relative to it
+    assert cli.display_path(inner, [b]) == "scan.pdf"
+    # several: the root as given goes in front, the nearest root wins
+    assert cli.display_path(inner, [a, b]) == os.path.join(b, "scan.pdf")
+    assert cli.display_path(os.path.join(a, ".", "x.png"), [a, b]) == os.path.join(a, "x.png")
+    assert cli.display_path("inner/scan.png", [a, b]) == "inner/scan.png"   # a member of an archive

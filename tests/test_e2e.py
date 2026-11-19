@@ -51,6 +51,10 @@ def test_cold_run(tool):
     assert grep(out, "^" + rel("tabelle.ods") + r":[0-9]+:Page 1:.*Wartungsvertrag Kesselanlage West"), out
     assert grep(out, "^" + rel("deck.odp") + r":[0-9]+:Page 2:.*Wartungsvertrag Kesselanlage"), out
     assert not grep(out, "^" + rel("deck.odp") + r":[0-9]+:Page 1:"), out
+    # the picture on a slide is read with its slide; the empty odp slide
+    # before it keeps its page number
+    assert grep(out, "^" + rel("deck.pptx") + r":[0-9]+:Page 1:.*Wartungsvertrag Kesselanlage"), out
+    assert grep(out, "^" + rel("deck.odp") + r":[0-9]+:Page 4:.*Wartungsvertrag Kesselanlage"), out
     for ext in ("tif", "tiff", "webp", "gif", "bmp"):
         if os.path.isfile(os.path.join(tool.fx, "formats", "photo." + ext)):
             assert grep(out, "^" + rel("formats", "photo." + ext) + ":"), out
@@ -182,6 +186,15 @@ def test_warm_run(tool, tmp_path):
     assert again == first, "the warm run started adapters: %r" % [c for c in again if c not in first]
     assert clean_err(warm), warm.err
 
+    # --refresh reads the files below its PATH again, and only those
+    fresh = t.run("--refresh", NEEDLE, "scan.pdf", env=env)
+    assert fresh.code == 0, fresh.err
+    new = calls()
+    assert len(new) == len(first) + 1, new
+    assert sorted(mode for mode, _ in new) == ["image", "image", "office", "pdf", "pdf"], new
+    assert t.search(env=env).code == 0
+    assert calls() == new, "the run after --refresh started adapters"
+
 
 def test_rapidocr_reads_a_non_latin_script(tool, tmp_path):
     """`--lang ru` routes to the Cyrillic model, which rapidocr fetches on
@@ -287,6 +300,10 @@ def test_no_ocr(tool):
     assert grep(r.out, r"textlayer\.pdf:[0-9]+:Page 2:.*Wartungsvertrag Kesselanlage"), r.out
     assert "scan.pdf" not in r.out, r.out
     assert "photo.jpg" not in r.out, r.out
+    # the text of the slides, not the pictures on them
+    assert grep(r.out, r"deck\.pptx:[0-9]+:Page 2:"), r.out
+    assert not grep(r.out, r"deck\.pptx:[0-9]+:Page 1:"), r.out
+    assert not grep(r.out, r"deck\.odp:[0-9]+:Page 4:"), r.out
     assert os.path.isdir(os.path.join(tool.cache, "none"))
     # --no-ocr wins over --force-ocr; --no-cache, so the adapter runs again
     r = tool.run("--no-ocr", "--force-ocr", "--no-cache", NEEDLE, ".")
@@ -810,3 +827,19 @@ def test_rga_killed_by_a_signal_is_not_a_no_hit(tool, tmp_path):
     r = tool.run("--no-names", NEEDLE, ".", env={"PATH": str(fake) + os.pathsep + os.environ["PATH"]})
     assert r.code == 2, (r.code, r.err)
     assert grep(r.err, "^" + re.escape(P) + ": rga was stopped by signal 9; the search is incomplete$"), r.err
+
+
+def test_several_paths(tool):
+    """Every argument after QUERY is searched, names and contents, and each
+    hit shows the path it was found under."""
+    r = tool.run(NEEDLE, "sub", "photo.png", os.path.join("formats", "photo.bmp"))
+    assert r.code == 0, r.err
+    assert grep(r.out, r"^sub[/\\]scan\.pdf:"), r.out
+    assert grep(r.out, r"^photo\.png:"), r.out
+    assert grep(r.out, r"^formats[/\\]photo\.bmp:"), r.out
+    assert not grep(r.out, r"textlayer\.pdf"), r.out           # not under any of the three
+    one = tool.run(NEEDLE, "sub")
+    assert set(one.out.splitlines()) < set(r.out.splitlines())
+    # a query of two words without quotes: the second word is taken as a path
+    r = tool.run("Wartungsvertrag", "Kesselanlage", ".")
+    assert r.code == 2 and "no such path: Kesselanlage; everything after QUERY is a PATH" in r.err

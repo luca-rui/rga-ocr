@@ -252,16 +252,23 @@ def main(root):
         "_rels/.rels": rels.format("ppt/presentation.xml"),
         "ppt/presentation.xml": '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>',
         "ppt/slides/slide1.xml": slide.format("Agenda"),
+        # slide 1 shows a picture of text: read by OCR, not with --no-ocr
+        "ppt/slides/_rels/slide1.xml.rels": (
+            '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>'),
+        "ppt/media/image1.png": png_photo,
         "ppt/slides/slide2.xml": slide.format("Status " + NEEDLE),
         # slide 3: the needle sits deep inside a long paragraph (snippet window test)
         "ppt/slides/slide3.xml": slide.format(FILLER * 3 + "Anhang " + NEEDLE + " Ost. " + FILLER * 3),
     })
-    # OpenDocument: the adapter reads content.xml only. ods: one page; odp:
-    # one page per draw:page, the needle on the second
+    # OpenDocument: the adapter reads content.xml, and the pictures an odp
+    # page shows. ods: one page; odp: one page per draw:page, the needle on
+    # the second, the third empty, the fourth a picture of text
     odf = ('<?xml version="1.0" encoding="UTF-8"?><office:document-content'
            ' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
            ' xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"'
            ' xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"'
+           ' xmlns:xlink="http://www.w3.org/1999/xlink"'
            ' xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body>{}</office:body></office:document-content>')
     manifest = ('<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">'
                 '<manifest:file-entry manifest:full-path="/" manifest:media-type="{}"/>'
@@ -283,7 +290,11 @@ def main(root):
         "mimetype": odp,
         "META-INF/manifest.xml": manifest.format(odp),
         "content.xml": odf.format('<office:presentation>' + page.format("Folie1", "Agenda")
-                                  + page.format("Folie2", "Status " + NEEDLE) + '</office:presentation>'),
+                                  + page.format("Folie2", "Status " + NEEDLE)
+                                  + '<draw:page draw:name="Folie3"></draw:page>'
+                                  + '<draw:page draw:name="Folie4"><draw:frame><draw:image xlink:href="Pictures/foto.png"/></draw:frame></draw:page>'
+                                  + '</office:presentation>'),
+        "Pictures/foto.png": png_photo,
     })
     # archive with an image inside
     with open(j("photo.jpg"), "rb") as f:
