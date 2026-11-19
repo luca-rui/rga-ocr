@@ -124,7 +124,9 @@ the repository holds no API token.
 When the tag check fails because CI on `main` was red or cancelled (a
 runner that never came, for one), re-run the failed jobs of that CI run
 and then re-run the release run; the tag stays. A re-run of the release
-after a failed later job skips the files PyPI already holds.
+after a failed later job skips the files PyPI already holds. The check
+asks for the whole CI run, so a leg that is not a required check on
+`main` stops a release as well when it is red.
 
 `tests/test_release_check.py` covers the script. The workflow itself runs
 only on a tag or by hand: repeat the dry run after any change to
