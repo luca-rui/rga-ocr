@@ -1,5 +1,9 @@
 # rga-ocr
 
+[![PyPI](https://img.shields.io/pypi/v/rga-ocr)](https://pypi.org/project/rga-ocr/)
+[![CI](https://github.com/luca-rui/rga-ocr/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/luca-rui/rga-ocr/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Search everything beneath a path for a string: file and directory names,
 plain text, Office documents, archives, PDFs, and photos or scans of text
 that have no text layer. Runs on macOS, Linux and Windows; the OCR engine
@@ -43,7 +47,7 @@ rga-ocr "maintenance contract" ~/Documents
 ```
 
 Quick start everywhere else, once `rga`, `rg` and `pandoc` are installed
-(see Install):
+(see [Install](#install)):
 
 ```
 pipx install "rga-ocr[rapidocr]"   # Linux
@@ -60,6 +64,45 @@ HEIC and HEIF images need pi-heif, which ships no wheels for Python 3.15
 yet. The install works there, without HEIC. Where `python3` is 3.15 and
 HEIC matters, add `--python python3.14` (any of 3.11 to 3.14) to the
 `pipx install` line.
+
+## Contents
+
+- [What is searched](#what-is-searched)
+- [Platforms and engines](#platforms-and-engines)
+- [Install](#install), [upgrading](#upgrading), [uninstalling](#uninstalling)
+- [Usage](#usage): [output](#output), [names](#names)
+- [Profile and paths](#profile-and-paths)
+- [How the adapters work](#how-the-adapters-work)
+- [The OCR cache](#the-ocr-cache)
+- [Privacy and network access](#privacy-and-network-access)
+- [Troubleshooting](#troubleshooting)
+- [Performance](#performance)
+- [Limits](#limits)
+- [Reporting bugs](#reporting-bugs)
+- [Dependencies and licences](#dependencies-and-licences)
+
+Working on the code: `CONTRIBUTING.md` has the development setup, the
+tests, the layout of the repository and the design notes.
+
+## What is searched
+
+| what | file types | read by |
+|------|------------|---------|
+| names of files and directories | all | `rga-ocr` |
+| plain text | whatever `rg` reads as text | `rg` |
+| PDFs, text layer and scanned pages | pdf | `ocrpdf` (OCR for pages without text) |
+| photos, screenshots and scans | jpg jpeg png heic heif tif tiff webp gif bmp | `ocrimg` (OCR) |
+| spreadsheets and slides | xlsx pptx ods odp | `officexml` |
+| text documents | docx odt epub fb2 ipynb html htm | rga through pandoc |
+| archives, searched member by member | zip jar tar tgz gz xz bz2 zst | rga |
+| SQLite databases | db db3 sqlite sqlite3 | rga |
+| mail, with `--mail` | eml mbox mbx | rga |
+
+Hidden files and files ignored by `.gitignore` are searched; `.git`,
+`node_modules`, `.venv` and `__pycache__` directories are skipped (see
+[Names](#names)). Pictures inside Office documents are not read, and
+neither are the old binary formats `.doc`, `.xls` and `.ppt` (see
+[Limits](#limits)).
 
 ## Platforms and engines
 
@@ -163,8 +206,9 @@ pipx upgrade rga-ocr        # or pip install -U in the venv, or brew upgrade rga
 rga-ocr setup --apply       # for plain rga only: refreshes the written adapter entries
 ```
 
-The cache key is the file plus the adapter `version`. The engine package
-version and the tuning variables below are not part of it, so after
+rga keys the cache on the path and modification time of the file and on
+the adapter `version`. The engine package version and the tuning variables
+below are not part of it, so after
 upgrading an engine package or changing a tuning variable, clear the
 affected cache (`rga-ocr --cache-info`, `rga-ocr --clear-cache ...`) to
 get fresh text.
@@ -381,8 +425,8 @@ run and hands the engine name and languages to the adapters as
 
 ## The OCR cache
 
-rga caches adapter output per file (keyed by path, size, mtime and the
-adapter's `version`). `rga-ocr` keeps one cache per engine and language
+rga caches adapter output per file, keyed by path, modification time, the
+adapter with its `version`, and the adapter list of the run. `rga-ocr` keeps one cache per engine and language
 setting under `cache_dir`, because the same scan yields different text
 with different settings: `vision-auto`, `vision-de-DE_en-US`,
 `tesseract-deu_eng`, `rapidocr-multi`, `rapidocr-cyrillic`, each with a
@@ -408,9 +452,62 @@ deletes that cache, several can be given at once, and `rga-ocr
 what it holds; files that are not caches stay, and `cache_dir` itself is
 removed only when it is empty afterwards. A bare `--clear-cache` only lists the caches and exits 2, so a
 forgotten argument cannot wipe everything. `--dry-run` prints what would
-be removed and deletes nothing. When `adapter.py` changes the output of a
-mode, bump that adapter's `version` in `setup_cmd.py`; only that adapter's cache
-entries are invalidated.
+be removed and deletes nothing.
+
+## Privacy and network access
+
+Your documents never leave the machine: every engine runs locally.
+
+The cache keeps what was read. For every PDF, image and Office file it
+holds the extracted text and the full path, compressed but not encrypted,
+under `cache_dir` in your user's cache directory (see
+[Profile and paths](#profile-and-paths)). Whoever can read that directory
+can read the text of the documents you searched. `rga-ocr --cache-info`
+shows what is there, `rga-ocr --clear-cache all` removes it, and
+`--no-cache` searches without leaving anything behind.
+
+The network is used in three places: `rapidocr` fetches the per-script
+recognition model from `www.modelscope.cn` on first use of a non-Latin
+`lang` (the bundled model needs no download); `rga-ocr setup --apply`
+fetches Tesseract `.traineddata` files from
+`github.com/tesseract-ocr/tessdata_fast`, at a pinned commit, and checks
+each file; the CI workflow downloads ripgrep-all from its GitHub
+releases. A search with `vision`, `winocr`, `tesseract` or the bundled
+`rapidocr` model opens no connection.
+
+One dependency would phone home on its own: the official `onnxruntime`
+wheels behind the `rapidocr` engine ship Microsoft's 1DS telemetry, on by
+default (a persistent device id and trace events sent over HTTPS, see
+`docs/Privacy.md` in the onnxruntime repository). `rga-ocr` sets
+`ORT_DISABLE_TELEMETRY=1` before the runtime loads, which keeps the
+uploader and the device id from being created; a value already in the
+environment is left alone. If you ran `onnxruntime` without that variable
+before, it may have left its store behind (on macOS
+`~/Library/Application Support/Microsoft/DeveloperTools/.onnxruntime/`).
+
+
+## Troubleshooting
+
+Start with `rga-ocr setup`: it checks the tools, the engine and the
+adapters and names what is missing. `rga-ocr --engines` says for every
+engine whether it works here and why not.
+
+| what you see | what it means, what to do |
+|--------------|---------------------------|
+| A scan or photo you know holds the text is not found | OCR misread it, or the phrase is split over columns. Try one distinctive word, and `--lang` with the document's language. |
+| A PDF with selectable text is not found, or the text shown is garbage | The PDF carries a bad text layer. `--force-ocr` reads every page with OCR as well. |
+| `adapter ... failed on FILE: ... (not cached, the next search reads the file again)`, exit 2 | The engine could not read that file in this run; the reason is in the line. Hits in other files are complete. Fix the cause and search again. |
+| `adapter ... failed on FILE: ...` without that note | The file itself cannot be read (damaged, encrypted). It is skipped until it changes. |
+| `Unknown adapter: "ocrpdf"` | The rga config in use lacks the adapter entries: with plain `rga`, or with `--rga-config-file`, run `rga-ocr setup --apply` (for another config: `rga-ocr --rga-config-file=F setup --apply`). |
+| Tesseract: language files missing | `rga-ocr setup --apply --engine tesseract --lang de,en` fetches them, or point `TESSDATA_PREFIX` at your own. |
+| `winocr` does not work | No OCR language pack is installed. `rga-ocr --engines` prints the `Add-WindowsCapability` command. |
+| HEIC and HEIF files are named as not read | pi-heif is missing: Python 3.15 and Windows on arm64 have no wheel yet. Install with Python 3.11 to 3.14. |
+| Text is stale after an engine upgrade or a changed tuning variable | Those are not part of the cache key. `rga-ocr --cache-info`, then `rga-ocr --clear-cache CACHE-ID`. |
+| `The database file is locked`, one hit missing | Two cache writes collided in ripgrep-all. Search again; everything else is cached. |
+| `searching for the word "setup"` | The setup command goes first: `rga-ocr setup --engine NAME`. |
+| The first search of a large folder takes minutes | Every scan is read once. The status line shows progress; the second search is fast. `-j N` sets how many files are read at once. |
+
+For anything else see [Reporting bugs](#reporting-bugs).
 
 ## Performance
 
@@ -504,61 +601,6 @@ and under a second afterwards.
   everything else.
 - Not covered: `.pages`/`.numbers`, Apple Notes, text in video frames.
 
-## Design notes
-
-Decisions worth knowing before changing things:
-
-- Searches are case-insensitive by default; `-s` flips it. A blank in a
-  query matches a run of non-letter characters in names, so one query
-  finds `Maintenance_Contract` and `maintenance contract`.
-- The name pass is a Python walk, not `find` or `fd`, so hidden files,
-  the `exclude` list and the blank modes behave the same on every platform.
-- Content hits show a snippet window instead of whole lines because OCR
-  output lines can be a page long.
-- Profile precedence is built-in default, then the profile, then
-  `RGA_OCR_<KEY>`, then the flag; the adapters read only the environment
-  that `rga-ocr` hands them, never the profile.
-- One cache per engine and language setting, because the same scan yields
-  different text per engine; the adapter `version` invalidates entries
-  when the output format changes.
-- `--no-cache` uses a throwaway cache directory per run, because
-  ripgrep-all 0.10.10's `--rga-no-cache` makes every custom adapter fail.
-- `rga-ocr` creates ripgrep-all's cache database (same schema, version and
-  application id as 0.10.10) before each run and holds it open until
-  ripgrep-all exits, so the parallel `rga-preproc` processes neither create
-  the schema nor rebuild the WAL index at the same time (see Limits).
-- The adapters run as `python -I -X utf8 -m rga_ocr.adapter MODE` with the
-  interpreter `rga-ocr` was installed with, so there is one place that
-  knows which engine packages exist and no launcher script to keep in sync.
-  An adapter ends with `os._exit(0)` after flushing its output: rg aborts
-  the whole search when a preprocessor exits non-zero, and the OCR
-  libraries' native teardown at interpreter exit must not decide that.
-
-## Tests
-
-```
-python -m venv .venv
-.venv/bin/pip install -e '.[vision,tesseract,rapidocr,test]'   # the extras your platform supports
-.venv/bin/python -m pytest -q
-RGA_OCR_ENGINE=tesseract .venv/bin/python -m pytest -q         # the same suite on another engine
-```
-
-`tests/make_fixtures.py` builds the fixtures (text, hidden file, text-layer
-PDF, scanned PDF, jpg/png/heic, EXIF-rotated jpg, docx/xlsx/pptx, zip with
-an image, long lines for the snippet window, decoys, excluded `.git`);
-`tests/test_e2e.py` runs `rga-ocr` against them as a subprocess with its
-own rga config, cache and profile, and asserts the shape of every hit, the
-exit codes, the profile precedence, the status line (through
-`tests/ptyrun.py`, POSIX only), adapter error forwarding and the warm-run
-timing. `tests/test_adapter.py`, `tests/test_cli.py` and
-`tests/test_setup.py` are unit tests for the paragraph grouping, image
-decoding, language mappings, cache clearing, argument errors and the rga
-config merge; they run without the toolchain. The end-to-end tests need
-`rga`, `rg`, `pandoc` on PATH; Vision
-needs a GUI session; the tesseract leg fetches `eng` and `deu` into its
-temp root when no tessdata is present. GitHub Actions runs the matrix in
-the table above.
-
 ## Reporting bugs
 
 Open an issue at <https://github.com/luca-rui/rga-ocr/issues> with the
@@ -567,28 +609,6 @@ output of `rga-ocr --version`, `rga --version`, `rga-ocr --engines` and
 Please do not attach the document that triggered the problem unless it is
 yours to share; a description of its type and size is enough to start.
 `CONTRIBUTING.md` has the development setup.
-
-## Layout
-
-```
-pyproject.toml              package rga-ocr, engine extras, console script
-src/rga_ocr/cli.py          the CLI: profile, name pass, rga run, rendering, cache tools
-src/rga_ocr/adapter.py      pdf | image | office; decoding and paragraph grouping
-src/rga_ocr/engines/        registry (__init__), vision, winocr, rapidocr, tesseract
-src/rga_ocr/paths.py        profile, cache, data and rga config locations per platform
-src/rga_ocr/setup_cmd.py    `rga-ocr setup`: checks, install commands, rga config merge
-tests/conftest.py           fixture tree, rga config, cache and profile in a temp root
-tests/test_e2e.py           the CLI as a subprocess against the fixtures
-tests/test_adapter.py       unit tests: decoding, grouping, language mappings
-tests/test_cli.py           unit tests: cache clearing, adapter list, usage errors
-tests/test_setup.py         unit tests: JSONC parsing, config merge, install commands
-tests/make_fixtures.py      builds the fixture tree (PDFs written by hand, images drawn with Pillow)
-tests/data/shot.heic        HEIC sample for platforms without an encoder
-tests/ptyrun.py             runs a command on a pseudo-terminal for the tty tests
-tools/check_licences.py     CI check: no GPL/AGPL dependency, every licence on the allow-list
-docs/design/glossary.md     the terms used in the code and in this file
-tools/check_tools.py        CI check: the tools are on PATH and rga's pandoc adapter extracts text
-```
 
 ## Dependencies and licences
 
@@ -621,25 +641,6 @@ but if a GPL library in the process matters to you, use the `vision`,
 you install and that `rga-ocr` starts as subprocesses; nothing of them is
 linked or bundled, so they do not change `rga-ocr`'s licence. ripgrep
 (MIT or Unlicense) is the same kind of external program.
-
-## Network access
-
-Your documents never leave the machine. The network is used in three
-places: `rapidocr` fetches the per-script recognition model from its model
-host on first use of a non-Latin `lang` (the bundled model needs no
-download); `rga-ocr setup --apply` fetches Tesseract `.traineddata` files
-from `github.com/tesseract-ocr/tessdata_fast`; the CI workflow downloads
-ripgrep-all from its GitHub releases.
-
-One dependency would phone home on its own: the official `onnxruntime`
-wheels behind the `rapidocr` engine ship Microsoft's 1DS telemetry, on by
-default (a persistent device id and trace events sent over HTTPS, see
-`docs/Privacy.md` in the onnxruntime repository). `rga-ocr` sets
-`ORT_DISABLE_TELEMETRY=1` before the runtime loads, which keeps the
-uploader and the device id from being created; a value already in the
-environment is left alone. If you ran `onnxruntime` without that variable
-before, it may have left its store behind (on macOS
-`~/Library/Application Support/Microsoft/DeveloperTools/.onnxruntime/`).
 
 ## License
 
