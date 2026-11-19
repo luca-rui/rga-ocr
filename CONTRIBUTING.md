@@ -67,7 +67,9 @@ its metadata and accepts only names on its allow-list, which holds no GPL
 or AGPL; it does not inspect files inside the wheels.
 
 Further legs run beside these: macOS with rapidocr, Windows with
-tesseract, Ubuntu with tesseract on Python 3.11 and 3.14, and one Ubuntu
+tesseract, Ubuntu with tesseract on Python 3.11 and 3.14, macOS with
+vision on Python 3.14 (what the Homebrew formula ships), Ubuntu with
+rapidocr on Python 3.13, and one Ubuntu
 leg that installs the core, `rapidocr` and test dependencies at the floor
 `pyproject.toml` names (`tools/min_constraints.py` writes the constraints
 file). When you raise or add one of those, that leg tells you whether the
@@ -81,7 +83,15 @@ the versions. The `auto` leg is the exception: it lets `rga-ocr setup
 would, without a pinned sum.
 
 `lint / ruff` runs `ruff check .` with the rules named in
-`pyproject.toml`. Locally: `pipx run ruff==0.17.5 check .`
+`pyproject.toml`. Locally: `pipx run ruff==0.17.5 check .` The same job
+runs `python tools/release_check.py consistency`: `VERSION` is the newest
+release `CHANGELOG.md` names, that section has a date and an entry, and
+the link definitions at the foot name it.
+
+The workflow also runs every Monday and can be started by hand. The
+dependencies are open floors, so the weekly run is where a new release of
+one of them shows up. A run on `main` is never cancelled by a later one:
+the release workflow asks for the green run of the tagged commit.
 
 The job names of all legs, of the build job and of `lint / ruff` are
 required checks on `main`. Do not rename them without changing the
@@ -100,15 +110,27 @@ the repository holds no API token.
    `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ rga-ocr==0.2.0rc1`.
 2. Set `VERSION`, move the `[Unreleased]` entries in `CHANGELOG.md` under
    the new version, merge.
-3. Tag the merge commit on `main` as `vX.Y.Z` and push the tag. The
-   workflow refuses a tag that differs from `VERSION` or points at a commit
-   that is not on `main`, then uploads to PyPI. Tags and PyPI versions are
+3. Wait for CI on the merge commit, then tag that commit on `main` as
+   `vX.Y.Z` and push the tag. Before the push, the same check the workflow
+   runs: `python tools/release_check.py tag vX.Y.Z --sha "$(git rev-parse origin/main)" --repo luca-rui/rga-ocr --wait 0`.
+   The workflow refuses a tag that differs from `VERSION`, a changelog
+   that does not name the version, a commit that is not on `main`, and a
+   commit whose CI run on `main` is not green (a run still going is waited
+   for, 40 minutes). Then it uploads to PyPI. Tags and PyPI versions are
    immutable: a wrong release is fixed by the next version.
-4. Create the GitHub release from the tag with the changelog section.
+4. The workflow creates the GitHub release `rga-ocr X.Y.Z` with the
+   changelog section as its text.
 
-Repeat the dry run after any change to `release.yml`, including a
-Dependabot update of the actions it uses: CI does not exercise that
-workflow.
+When the tag check fails because CI on `main` was red or cancelled (a
+runner that never came, for one), re-run the failed jobs of that CI run
+and then re-run the release run; the tag stays. A re-run of the release
+after a failed later job skips the files PyPI already holds. The check
+asks for the whole CI run, so a leg that is not a required check on
+`main` stops a release as well when it is red.
+
+`tests/test_release_check.py` covers the script. The workflow itself runs
+only on a tag or by hand: repeat the dry run after any change to
+`release.yml`, including a Dependabot update of the actions it uses.
 
 ## Style
 

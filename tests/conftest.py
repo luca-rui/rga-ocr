@@ -93,18 +93,11 @@ def spy_config():
     return cfg
 
 
-IMAGE_EXT = ["jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "webp", "gif", "bmp"]
-IMAGE_MIME = ["image/jpeg", "image/png", "image/heic", "image/heif", "image/tiff",
-              "image/webp", "image/gif", "image/bmp"]
-OFFICE_EXT = ["xlsx", "pptx", "ods", "odp"]
-OFFICE_MIME = ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-               "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-               "application/vnd.oasis.opendocument.spreadsheet",
-               "application/vnd.oasis.opendocument.presentation"]
-
-
 def rga_config():
-    """The custom adapter entries the suite installs into its own rga config."""
+    """The custom adapter entries the suite installs into its own rga config.
+    The file types are the ones the package registers, so a type dropped
+    there is missed by the end-to-end run; test_setup.py pins the lists."""
+    from rga_ocr.setup_cmd import IMAGE_EXT, IMAGE_MIME, OFFICE_EXT, OFFICE_MIME
     def entry(name, mode, ext, mime, hint):
         return {"name": name, "description": f"{NAMES['prog']} {mode} adapter (test)",
                 "version": 1, "extensions": ext, "mimetypes": mime,

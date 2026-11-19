@@ -4,12 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Mondays: the dependencies are open floors, so a new release of one of
+    # them is met here and not first by someone who installs
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # a new push to a pull request takes the place of the run before it. Runs
+  # on main are never cancelled: release.yml asks for the green run of the
+  # tagged commit.
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -58,7 +66,6 @@ jobs:
           - os: windows-latest
             engine: winocr
             extras: winocr,test   # the en-US OCR language pack is present on windows-latest
-          # not required checks (yet): see the comment at `name`
           - os: macos-15
             engine: rapidocr
             extras: rapidocr,test
@@ -81,6 +88,19 @@ jobs:
             python: "3.11"          # the oldest supported Python: the floors have wheels for it
             minimum: true           # core, rapidocr and test dependencies at the floor pyproject.toml names
             label: ubuntu-latest / rapidocr / minimum versions
+          # Not required checks until the ruleset names them: see the
+          # comment at `name`. The first is what the Homebrew formula
+          # ships: macOS, Python 3.14, Vision.
+          - os: macos-15
+            engine: vision
+            extras: vision,test
+            python: "3.14"
+            label: macos-15 / vision / python 3.14
+          - os: ubuntu-latest
+            engine: rapidocr
+            extras: rapidocr,test
+            python: "3.13"
+            label: ubuntu-latest / rapidocr / python 3.13
     env:
       RGA_OCR_ENGINE: ${{ matrix.engine }}
       TESSDATA_PREFIX: ${{ github.workspace }}/.tessdata
@@ -214,6 +234,11 @@ jobs:
           python -m pip install -q ruff==0.17.5
           ruff check .
 
+      - name: Version and changelog agree
+        # a release pull request that sets VERSION and forgets the
+        # changelog fails here, before a tag exists
+        run: python tools/release_check.py consistency
+
   build:
     name: build / sdist and wheel
     runs-on: ubuntu-latest
@@ -236,6 +261,19 @@ jobs:
           /tmp/clean/bin/pip install -q dist/*.whl
           /tmp/clean/bin/rga-ocr --version
           /tmp/clean/bin/rga-ocr --engines || true   # exit 1 is expected: no engine extra installed
+
+      - name: A copy in the user site-packages starts its adapter
+        # `pip install --user`: the adapter's -I would hide the package
+        run: |
+          python -m pip install -q --user dist/*.whl
+          cd /tmp
+          python -c "
+          import sys
+          from rga_ocr import setup_cmd as sc
+          assert sc.in_user_site(), sc.__file__
+          assert sc.adapter_args()[0] == '-P', sc.adapter_args()
+          sys.exit(0 if sc.adapter_starts(sc.Out()) else 1)"
+          python -m pip uninstall -q -y rga-ocr
 
       - name: No copyleft Python package comes along
         run: |

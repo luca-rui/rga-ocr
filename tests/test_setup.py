@@ -743,3 +743,18 @@ def test_load_jsonc_accepts_hash_comments_like_rga():
     assert sc.load_jsonc("# only a comment") == {}
     with pytest.raises(ValueError):
         sc.load_jsonc('{"a": tru # e\n}')
+
+
+def test_registered_file_types():
+    """The file types the adapters are registered for. The end-to-end suite
+    takes its lists from the package, so a type dropped by mistake fails
+    here by name."""
+    assert sc.IMAGE_EXT == ["jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "webp", "gif", "bmp"]
+    assert sc.OFFICE_EXT == ["xlsx", "pptx", "ods", "odp"]
+    assert sc.IMAGE_MIME == ["image/jpeg", "image/png", "image/heic", "image/heif", "image/tiff",
+                             "image/webp", "image/gif", "image/bmp"]
+    assert len(sc.OFFICE_MIME) == len(sc.OFFICE_EXT)
+    by_name = {e["name"]: e for e in sc.adapter_entries()}
+    assert by_name["ocrimg"]["extensions"] == sc.IMAGE_EXT and by_name["ocrimg"]["mimetypes"] == sc.IMAGE_MIME
+    assert by_name["officexml"]["extensions"] == sc.OFFICE_EXT
+    assert by_name["ocrpdf"]["extensions"] == ["pdf"]
