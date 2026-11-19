@@ -342,7 +342,8 @@ def report(event, mode, path, detail=""):
     if not REPORT:
         return
     try:
-        fd = os.open(REPORT, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        # O_BINARY: Windows would write "\r\n" and leave a "\r" on every detail
+        fd = os.open(REPORT, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
         try:
             line = f"{event}\t{mode}\t{path}\t{detail}\n".replace("\r", " ")
             os.write(fd, line.encode("utf-8", "replace")[:4000])

@@ -759,7 +759,7 @@ class Report:
         self.rest = lines.pop()
         out = []
         for raw in lines:
-            parts = raw.decode("utf-8", "replace").split("\t", 3)
+            parts = raw.rstrip(b"\r").decode("utf-8", "replace").split("\t", 3)
             if len(parts) == 4:
                 out.append(parts)
         return out

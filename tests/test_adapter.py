@@ -317,8 +317,16 @@ def test_decode_puts_transparent_images_on_white(mode):
         pal.save(buf, "PNG", transparency=0)            # entry 0 is transparent
     elif mode != "PA":
         img.convert(mode).save(buf, "PNG")
-    # PNG cannot hold PA; it reaches to_rgb from other containers
-    frame = adapter.to_rgb(img.convert("PA")) if mode == "PA" else adapter.decode(buf.getvalue())[0]
+    if mode == "PA":
+        # PNG cannot hold PA; it reaches to_rgb from other containers. Built
+        # by hand: older Pillow drops the alpha in convert("PA").
+        pa = Image.new("P", img.size, 0)
+        pa.putpalette([0, 0, 0])
+        pa.putalpha(img.getchannel("A"))
+        assert pa.mode == "PA"
+        frame = adapter.to_rgb(pa)
+    else:
+        frame = adapter.decode(buf.getvalue())[0]
     assert frame.mode == "RGB"
     assert frame.getpixel((0, 0)) == (255, 255, 255)
     assert frame.getpixel((15, 10)) == (0, 0, 0)
