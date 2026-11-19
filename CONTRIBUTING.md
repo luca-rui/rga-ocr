@@ -49,8 +49,9 @@ The three rga adapters (`ocrpdf`, `ocrimg`, `officexml`) carry a `version`
 in `src/rga_ocr/setup_cmd.py`. rga keys its cache on it: bump the version
 of an adapter whenever its output for the same input changes (text
 extraction, paragraph grouping, page breaks), so that cached entries are
-not served stale. Users pick the new version up with
-`rga-ocr setup --apply`.
+not served stale. A search through `rga-ocr` uses the new version at once;
+plain `rga` picks it up after `rga-ocr setup --apply`. Say in the changelog
+that the first search after the upgrade reads the files again.
 
 ## CI
 

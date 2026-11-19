@@ -353,8 +353,9 @@ def prepare_cache(d):
     many files starting at once, one of them can hit "The database file
     is locked" and its file goes unsearched. Writing the schema up front
     and keeping one connection open while rga runs leaves plain reads at
-    start-up. An existing database is only opened, never changed: rga
-    owns its schema. The caller closes the connection after the run."""
+    start-up. The schema of an existing database is never changed: rga
+    owns it (forget_failed deletes rows after the run, nothing else). The
+    caller closes the connection after the run."""
     import sqlite3
     os.makedirs(d, exist_ok=True)
     db = os.path.join(d, "cache.sqlite3")
@@ -957,8 +958,8 @@ def run_config(passed, run_dir):
     gets its own config whenever rga's does not hold the three entries this
     installation would write: a copy of rga's config with the entries put
     in. rga's own file is never written here. None as well when the caller
-    passed --rga-config-file, or when rga's config does not parse (rga
-    reports that itself)."""
+    passed --rga-config-file, or when rga's config cannot be read here; the
+    search then depends on what that file holds, so say why."""
     if rga_config_flag(passed) is not None:
         return None
     from rga_ocr import setup_cmd
@@ -968,21 +969,52 @@ def run_config(passed, run_dir):
             existing = setup_cmd.load_jsonc(f.read())
     except FileNotFoundError:
         pass
-    except (OSError, ValueError):
-        return None
+    except (OSError, ValueError) as e:
+        return _config_unread(e)
     if not isinstance(existing, dict):
-        return None
+        return _config_unread("not a JSON object")
     entries = setup_cmd.adapter_entries()
     names = {e["name"] for e in entries}
     custom = existing.get("custom_adapters") or []
     if not isinstance(custom, list) or not all(isinstance(a, dict) for a in custom):
-        return None
+        return _config_unread("custom_adapters is not a list of objects")
     if [a for a in custom if a.get("name") in names] == entries:
         return None
     path = os.path.join(run_dir, "rga-config.jsonc")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(setup_cmd.merge_config(existing, entries), f, ensure_ascii=False)
     return path
+
+
+def _config_unread(why):
+    warn(f"cannot read {paths.rga_config_path()} ({why}); searching with it as it is, "
+         f"without this installation's adapter entries")
+    return None
+
+
+def forget_failed(con, failed):
+    """Remove the cache rows of files whose adapter run failed.
+
+    The adapter must exit 0 even when it fails (rg aborts the whole search
+    otherwise), so rga stores the empty output as that file's text and never
+    asks again: one failed model download or one run without the language
+    data would hide the file from every later search. rga keys a row on the
+    path of the file on disk; a failed archive member takes the archive's
+    row with it. Called after rga has exited. A failure here only costs the
+    retry, so it is not reported."""
+    import sqlite3
+    if con is None or not failed:
+        return
+    try:
+        for path in failed:
+            path = os.path.normpath(path)
+            con.execute(
+                "delete from preproc_cache where file_path = ?1"
+                " or substr(?1, 1, length(file_path) + 1) in (file_path || '/', file_path || ?2)",
+                (path, os.sep))
+        con.commit()
+    except sqlite3.Error:
+        pass
 
 
 def run_contents(o, st, printer, root, query):
@@ -1102,9 +1134,14 @@ def run_contents(o, st, printer, root, query):
         if err:
             sys.stderr.buffer.write(err)
             sys.stderr.flush()
+        failed = []
         for ev, mode, path, detail in Report(report_path).events():
             if ev == "error":
                 warn(f"adapter {mode} failed on {display_path(path, root)}: {detail}")
+                failed.append(path)
+            elif ev == "partial":
+                warn(f"adapter {mode}, {display_path(path, root)}: {detail}")
+        forget_failed(held, failed)
         # rga reports its own failures (config, cache, adapter spawn) with exit 1, like "no match"
         if status == 1 and re.search(rb"(?im)^error", err):
             status = 2
