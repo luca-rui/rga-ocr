@@ -15,7 +15,7 @@ All notable changes to this project are documented here. The format follows
   hint, where it said `too many arguments` before.
 - `--refresh` reads the files below PATH again and stores the new text,
   for one file or folder whose cached text is stale, without clearing the
-  whole cache.
+  whole cache. It warns when it could not open the cache.
 - The pictures on pptx and odp slides are read by OCR and found under
   the page of their slide. `--no-ocr` leaves them out. The first search
   after the upgrade reads xlsx, pptx, ods and odp files again, and a deck
@@ -64,6 +64,10 @@ All notable changes to this project are documented here. The format follows
 
 - An odp slide without text no longer shifts the page numbers of the
   slides after it.
+- An image with a side under 10 pixels (a rule, a tracking pixel) is
+  passed over on every engine: nothing that small holds text. Apple
+  Vision raises on a side of 2 pixels or less, so such a file was read
+  again, with a warning, on every search.
 - `rga-ocr setup` ended in a traceback on an rga config that is not a
   JSON object or whose `custom_adapters` is not a list of objects, and
   `setup --apply` wrote over `"custom_adapters": {}`. Both leave the file

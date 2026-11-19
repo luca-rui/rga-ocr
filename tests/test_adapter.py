@@ -286,7 +286,8 @@ def test_ocr_wraps_engine_errors(monkeypatch):
                     raise OSError("no\nmodel")
             self.engine = Engine()
     with pytest.raises(adapter.EngineFailure, match="OSError: no model"):
-        Broken().text(None)
+        from PIL import Image
+        Broken().text(Image.new("RGB", (40, 40)))
 
 
 def run_main(monkeypatch, tmp_path, mode, data):
@@ -481,6 +482,34 @@ def test_deck_is_retried_and_keeps_its_text_when_the_engine_is_down(picture_ocr,
     out, events = run_main(monkeypatch, tmp_path, "office", office_file(deck()))
     assert out == [adapter.PAGE_BREAK.join(["Agenda", "Status", "Ende"])]
     assert events == ["start", "retry", "done"]
+
+
+def test_an_engine_that_does_not_start_is_tried_once_per_deck(picture_ocr, monkeypatch):
+    class Down(PictureOCR):
+        def __init__(self):
+            super().__init__()
+            raise adapter.EngineFailure(OSError("no language data"))
+    monkeypatch.setattr(PictureOCR, "made", 0)
+    monkeypatch.setattr(adapter, "OCR", Down)
+    with pytest.raises(adapter.EngineFailure, match="no language data") as e:
+        office(deck())
+    assert e.value.text.split(adapter.PAGE_BREAK) == ["Agenda", "Status", "Ende"]
+    assert PictureOCR.made == 1
+
+
+def test_an_image_too_small_for_text_never_reaches_the_engine(monkeypatch):
+    # a rule or a bullet on a slide: Apple Vision raises on a side of 2 pixels,
+    # and a deck of such pictures would be read again on every search
+    from PIL import Image
+
+    class NoEngine(adapter.OCR):
+        def __init__(self):
+            self.engine = None      # any call would raise
+    ocr = NoEngine()
+    for size in ((1, 1), (2000, 2), (9, 400)):
+        assert ocr.text(Image.new("RGB", size, "white")) == ""
+    with pytest.raises(adapter.EngineFailure):
+        ocr.text(Image.new("RGB", (10, 10), "white"))
 
 
 def test_deck_with_more_pictures_than_the_limit(picture_ocr, monkeypatch):

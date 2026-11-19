@@ -22,6 +22,9 @@ Environment (set by rga-ocr from the profile, flags, or directly):
   RGA_OCR_RENDER_DPI      PDF render resolution for OCR (200)
   RGA_OCR_MAX_PIXELS      longest image side handed to the OCR engine (3000)
   RGA_OCR_PARAGRAPH_GAP   line gap, in line heights, that starts a new output line (0.7)
+  RGA_OCR_MAX_FRAMES      frames read of one multi-frame image (500)
+  RGA_OCR_MAX_OFFICE_MB   unpacked text read of one office file, in MB (256)
+  RGA_OCR_MAX_PICTURES    pictures read of one pptx or odp file (200)
   RGA_OCR_REPORT          path of a report file: one line is appended when a file
                           starts, one when it is done, and one per error (the
                           file cannot be read), retry (the OCR engine failed;
@@ -64,6 +67,9 @@ PARAGRAPH_GAP = _env_num("PARAGRAPH_GAP", 0.7, float)
 MAX_FRAMES = _env_num("MAX_FRAMES", 500, int)         # frames read of one multi-frame image
 MAX_OFFICE_MB = _env_num("MAX_OFFICE_MB", 256, int)   # unpacked XML read of one office file
 MAX_PICTURES = _env_num("MAX_PICTURES", 200, int)     # pictures OCR'd of one pptx or odp
+# An image with a shorter side holds no text a reader could see (a rule, a
+# bullet, a tracking pixel), and Apple Vision raises on a side of 2 pixels.
+MIN_SIDE = 10
 MAX_PICTURE_BYTES = 64 * 1024 * 1024                  # a larger picture in a slide deck is not read
 PAGE_BREAK = "\x0c"
 
@@ -173,6 +179,8 @@ class OCR:
             raise EngineFailure(e) from e
 
     def text(self, img):
+        if min(img.size) < MIN_SIDE:
+            return ""
         try:
             lines = self.engine.recognize(img)
         except Exception as e:  # noqa: BLE001
@@ -371,13 +379,14 @@ class _Pictures:
         self.names = set(z.namelist())
         self.off = os.environ.get(ENV_PREFIX + "NO_OCR") == "1"
         self.ocr = None
+        self.down = None        # the engine did not start: no further picture is tried
         self.done = {}
-        self.failed = []        # engine failures
+        self.failed = []        # engine failures on single pictures
         self.unread = 0         # pictures that could not be decoded, or are too large
         self.capped = False
 
     def text(self, name):
-        if self.off or name not in self.names or not name.lower().endswith(_PICTURE_EXT):
+        if self.off or self.down or name not in self.names or not name.lower().endswith(_PICTURE_EXT):
             return ""
         if name not in self.done:
             if len(self.done) >= MAX_PICTURES:
@@ -387,13 +396,17 @@ class _Pictures:
         return self.done[name]
 
     def _read(self, name):
+        if self.ocr is None:
+            try:
+                self.ocr = OCR()
+            except EngineFailure as e:
+                self.down = e
+                return ""
         try:
             with self.z.open(name) as f:
                 data = f.read(MAX_PICTURE_BYTES + 1)
             if len(data) > MAX_PICTURE_BYTES:
                 raise RuntimeError("picture too large")
-            if self.ocr is None:
-                self.ocr = OCR()
             return "\n".join(t for t in self.ocr.text_of_bytes(data) if t)
         except EngineFailure as e:
             self.failed.append(e)
@@ -403,16 +416,17 @@ class _Pictures:
 
     def close(self, text):
         """Called with the text of the whole file: notes what was left out.
-        When the engine read none of the pictures, the engine is the problem:
-        the text goes out, and the file is read again by the next search."""
+        When the engine did not start or read none of the pictures, the
+        engine is the problem: the text goes out, and the file is read again
+        by the next search."""
         if self.capped:
             NOTES.append(f"more than {MAX_PICTURES} pictures, the rest was not read "
                          f"({ENV_PREFIX}MAX_PICTURES raises the limit)")
         if self.unread:
             NOTES.append(f"{self.unread} of {len(self.done)} pictures could not be read")
-        if self.failed:
-            if len(self.failed) + self.unread == len(self.done):
-                e = self.failed[0]
+        if self.down or self.failed:
+            if self.down or len(self.failed) + self.unread == len(self.done):
+                e = self.down or self.failed[0]
                 e.text = text
                 raise e
             NOTES.append(f"OCR failed on {len(self.failed)} of {len(self.done)} pictures: {self.failed[0]}")

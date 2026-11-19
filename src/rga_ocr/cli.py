@@ -1092,10 +1092,11 @@ def forget_below(con, root):
     """Remove the cache rows of root (a file, a directory, or a list of
     them) and of everything below it, so that the run that follows reads
     those files again (--refresh). Only the cache of this run's engine and
-    language setting is touched. Returns the number of rows removed."""
+    language setting is touched. Returns the number of rows removed, None
+    when the cache could not be changed."""
     import sqlite3
     if con is None:
-        return 0
+        return None
     n = 0
     try:
         for base in {f(r) for r in as_roots(root) for f in (os.path.abspath, os.path.realpath)}:
@@ -1104,7 +1105,7 @@ def forget_below(con, root):
                              (len(prefix), prefix, base)).rowcount
         con.commit()
     except sqlite3.Error:
-        pass
+        return None
     return n
 
 
@@ -1233,8 +1234,9 @@ def run_contents(o, st, printer, root, query):
             key = engines.cache_tag(engine, langs, o["force"]) if engine else "none"
             cache = os.path.join(os.path.expanduser(st["cache_dir"]), key)
         held = prepare_cache(cache)
-        if o["refresh"] and not o["no_cache"]:
-            forget_below(held, root)
+        if o["refresh"] and not o["no_cache"] and forget_below(held, root) is None:
+            warn("--refresh could not open the cache; files may come from it unread "
+                 "(--no-cache reads every file again)")
         cmd.append("--rga-cache-path=" + cache)
         if not o["regex"]:
             cmd.append("-F")

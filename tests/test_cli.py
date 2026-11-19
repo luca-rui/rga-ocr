@@ -179,7 +179,7 @@ def test_forget_failed_drops_the_rows_of_failed_files(tmp_path):
     assert left() == [f for _a, f in rows[:3] + rows[4:]]
     assert cli.forget_below(held, [rows[0][1], root + "2"]) == 2
     assert left() == [f for _a, f in rows[1:3]]
-    assert cli.forget_below(None, root) == 0
+    assert cli.forget_below(None, root) is None    # no cache to change: the caller warns
     # several search roots: the archive rows below each of them go
     fill()
     cli.forget_failed(held, ["inner/scan.png"], [root, root + "2"])
