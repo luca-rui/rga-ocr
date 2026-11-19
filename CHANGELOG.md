@@ -6,7 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A search works without `rga-ocr setup --apply`. Where rga's config lacks
+  the three adapter entries of this installation, or holds other ones,
+  `rga-ocr` passes rga a copy of the config with the entries put in, for
+  that run only. rga's own file is not touched. `setup --apply` remains
+  for the Tesseract language files, for plain `rga`, and for searches that
+  name a config with `--rga-config-file`.
+
 ### Changed
+
+- `rga-ocr setup` no longer counts the unwritten rga config as something
+  to do, unless `--rga-config-file` names the file.
 
 - The README names Homebrew as the first way to install on macOS:
   `brew install luca-rui/tap/rga-ocr`.

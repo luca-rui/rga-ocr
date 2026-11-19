@@ -8,11 +8,13 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import time
 
 import pytest
 
-from conftest import (HERE, IS_WINDOWS, NAMES, NEEDLE, Tool, cache_tag, clean_err, engine_name, grep, rel,
+from conftest import (HERE, IS_WINDOWS, NAMES, NEEDLE, TESSDATA_LANGS, Tool, cache_tag, clean_err, engine_name, grep, rel,
                       spy_config)
 
 P = NAMES["prog"]
@@ -66,6 +68,71 @@ def test_cold_run(tool):
     assert not grep(out, r"decoy\.pdf"), out
     assert not grep(out, "^" + rel("Angebot") + r"[^:]*\.bin:"), out
     assert clean_err(r), r.err
+
+
+# rga's config path redirected to argv[1]: the CLI without --rga-config-file,
+# and without touching the config of the user who runs the suite. That only
+# moves where the tool looks; blind_rga() below does the same for rga.
+NO_SETUP = ("import sys\n"
+            "from rga_ocr import cli, paths\n"
+            "cfg = sys.argv[1]\n"
+            "paths.rga_config_path = lambda: cfg\n"
+            "sys.exit(cli.main(sys.argv[2:]))\n")
+
+
+def blind_rga(tool, empty):
+    """The suite's environment with rga's own config directory moved to an
+    empty one, so that a config the user set up cannot make the test pass.
+    Not possible on Windows, where rga asks the system for the directory;
+    a CI runner has no such config."""
+    if IS_WINDOWS:
+        return tool.env
+    if sys.platform != "darwin":
+        return tool.env_with({"XDG_CONFIG_HOME": empty})
+    extra = {"HOME": empty}
+    if engine_name() == "tesseract" and "TESSDATA_PREFIX" not in os.environ:
+        # the language files may sit under the real home directory
+        from rga_ocr.engines import tesseract
+        found = tesseract.find_tessdata(TESSDATA_LANGS)
+        if found:
+            extra["TESSDATA_PREFIX"] = found
+    return tool.env_with(extra)
+
+
+def test_search_without_setup(tool, tmp_path):
+    """No --rga-config-file and no `setup --apply`: the run brings its own
+    adapter entries, and rga's config stays as it was."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    shutil.copy(os.path.join(tool.fx, "photo.png"), docs)
+    empty = tmp_path / "home"
+    empty.mkdir()
+    env = blind_rga(tool, str(empty))
+
+    def search(cfg):
+        cmd = [sys.executable, "-X", "utf8", "-c", NO_SETUP, str(cfg), "--no-cache", NEEDLE, str(docs)]
+        p = subprocess.run(cmd, cwd=str(tmp_path), env=env, capture_output=True, timeout=600)
+        return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+
+    absent = tmp_path / "absent.jsonc"
+    code, out, err = search(absent)
+    assert code == 0 and "photo.png" in out, (code, out, err)
+    assert not absent.exists()
+
+    # entries that point at an interpreter that is gone, next to a foreign adapter
+    stale = spy_config()
+    for a in stale["custom_adapters"]:
+        a["binary"] = str(tmp_path / "gone" / "python")
+    stale["custom_adapters"].append({
+        "name": "mine", "description": "someone else's", "version": 1, "extensions": ["mine"],
+        "mimetypes": [], "binary": sys.executable, "args": ["-c", "pass"],
+        "disabled_by_default": True, "match_only_by_mime": False})
+    text = json.dumps(stale)
+    cfg = tmp_path / "stale.jsonc"
+    cfg.write_text(text, encoding="utf-8")
+    code, out, err = search(cfg)
+    assert code == 0 and "photo.png" in out, (code, out, err)
+    assert cfg.read_text(encoding="utf-8") == text
 
 
 def test_warm_run(tool, tmp_path):

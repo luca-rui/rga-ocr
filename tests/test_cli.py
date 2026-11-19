@@ -1,5 +1,6 @@
 """Unit tests for the CLI's own logic: cache removal scope, adapter list,
 usage errors, the rga config pass-through to setup. No engine, no rga."""
+import json
 import os
 import re
 
@@ -69,6 +70,58 @@ def test_rga_config_flag():
     assert cli.rga_config_flag([]) is None
     assert cli.rga_config_flag(["--rga-no-cache"]) is None
     assert cli.rga_config_flag(["--rga-no-cache", "--rga-config-file=/x/c.jsonc"]) == "/x/c.jsonc"
+
+
+@pytest.fixture
+def rga_cfg(tmp_path, monkeypatch):
+    """rga's config path redirected into tmp_path; the file is absent."""
+    path = tmp_path / "rga" / "config.jsonc"
+    path.parent.mkdir()
+    monkeypatch.setattr(cli.paths, "rga_config_path", lambda: str(path))
+    return path
+
+
+def test_run_config_is_written_when_rga_has_no_config(rga_cfg, tmp_path):
+    from rga_ocr import setup_cmd
+    got = cli.run_config([], str(tmp_path))
+    assert got and os.path.dirname(got) == str(tmp_path)
+    with open(got, encoding="utf-8") as f:
+        assert json.load(f) == {"custom_adapters": setup_cmd.adapter_entries()}
+    assert not rga_cfg.exists()          # rga's own file is never created
+
+
+def test_run_config_is_not_needed_after_setup(rga_cfg, tmp_path):
+    from rga_ocr import setup_cmd
+    other = {"name": "mine", "binary": "/bin/cat"}
+    # the order among other adapters does not matter, comments are fine
+    cfg = {"custom_adapters": [other] + setup_cmd.adapter_entries()}
+    rga_cfg.write_text("// by hand\n" + json.dumps(cfg), encoding="utf-8")
+    assert cli.run_config([], str(tmp_path)) is None
+    assert os.listdir(tmp_path) == ["rga"]
+
+
+def test_run_config_replaces_entries_of_another_installation(rga_cfg, tmp_path):
+    from rga_ocr import setup_cmd
+    stale = setup_cmd.adapter_entries(binary="/gone/bin/python")
+    other = {"name": "mine", "binary": "/bin/cat"}
+    text = json.dumps({"max_archive_recursion": 2, "custom_adapters": stale + [other]})
+    rga_cfg.write_text(text, encoding="utf-8")
+    got = cli.run_config(["-j", "2"], str(tmp_path))
+    with open(got, encoding="utf-8") as f:
+        merged = json.load(f)
+    assert merged == {"max_archive_recursion": 2,
+                      "custom_adapters": setup_cmd.adapter_entries() + [other]}
+    assert rga_cfg.read_text(encoding="utf-8") == text
+
+
+def test_run_config_stays_out_of_the_way(rga_cfg, tmp_path):
+    # the caller's own --rga-config-file wins, whatever rga's config holds
+    assert cli.run_config(["--rga-config-file=/x/c.jsonc"], str(tmp_path)) is None
+    # a config that does not parse is rga's to report
+    for text in ("{ not json", "[]", '{"custom_adapters": "x"}', '{"custom_adapters": ["x"]}'):
+        rga_cfg.write_text(text, encoding="utf-8")
+        assert cli.run_config([], str(tmp_path)) is None
+    assert os.listdir(tmp_path) == ["rga"]
 
 
 @pytest.mark.parametrize("flag,key,value", [
