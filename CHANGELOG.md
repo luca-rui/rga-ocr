@@ -19,7 +19,7 @@ All notable changes to this project are documented here. The format follows
   and the warning says so. When such a file sits inside an archive, the
   archives below the search root are read again.
 - A PDF with a page that cannot be OCR'd keeps the text of its other
-  pages; the failed pages are named in a warning, once. When no page can
+  pages; a warning gives their number and the first of them, once. When no page can
   be OCR'd, the file counts as an engine failure and is read again on the
   next search.
 - xlsx, pptx, ods, odp: a word split over several text runs stays one word

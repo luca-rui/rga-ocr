@@ -199,13 +199,15 @@ def _text_layer(page):
     width, height = page.get_size()
     tp = page.get_textpage()
     try:
-        text = tp.get_text_range()
+        # explicit range: with the defaults pypdfium2 4.x reads by bounds,
+        # which gives other positions and \x02 as the hyphen mark
+        text = tp.get_text_range(0, tp.count_chars())
         lines, pos = [], 0
         # U+FFFE: PDFium's marker for a hyphen at a line end, the next printed
         # line follows without a line break.
-        for part in re.split(r"(\r\n|\n|\r|\ufffe)", text):
+        for part in re.split(r"(\r\n|\n|\r|\ufffe|\x02)", text):
             units = len(part.encode("utf-16-le")) // 2      # char indices are UTF-16 units
-            if part == "\ufffe" and lines:
+            if part in ("\ufffe", "\x02") and lines:
                 lines[-1][3] += "-"
             elif part.strip():
                 box = _line_box(tp, pos, units)

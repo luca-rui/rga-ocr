@@ -453,17 +453,18 @@ def test_engine_failure_is_not_cached(tool, tmp_path):
     failed = "^" + re.escape(P) + r": adapter image failed on photo\.png: OSError: model fetch failed \(not cached"
     unreadable = "^" + re.escape(P) + r": adapter pdf failed on broken\.pdf: "
     open(down, "w").close()
-    for _ in range(2):                       # the second run does not answer from the cache
+    member = "^" + re.escape(P) + r": adapter image failed on needle\.jpg: OSError: model fetch failed \(not cached"
+    for run in range(2):                     # the second run does not answer from the cache
         r = t.search(env=env)
-        assert not grep(r.out, r"photo\.png") and grep(r.err, failed), (r.out, r.err)
-    assert grep(r.err, "^" + re.escape(P) + r": adapter \w+ failed on [^:]*: OSError: model fetch failed") , r.err
+        assert not grep(r.out, r"photo\.png|needle\.jpg"), r.out
+        assert grep(r.err, failed) and grep(r.err, member), r.err
+        # a file that cannot be opened is reported once, then cached as empty
+        assert bool(grep(r.err, unreadable)) == (run == 0), r.err
     os.remove(down)
     r = t.search(env=env)
     assert grep(r.out, r"^(\./)?photo\.png:"), (r.out, r.err)
     assert grep(r.out, r"^(\./)?bundle\.zip:"), (r.out, r.err)
     assert not grep(r.err, "model fetch failed"), r.err
-    # a file that cannot be opened is a different case: reported once, then
-    # cached as empty until the file changes
     assert not grep(r.err, unreadable), r.err
 
 

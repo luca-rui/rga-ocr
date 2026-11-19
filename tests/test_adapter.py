@@ -234,6 +234,19 @@ def test_pdf_fails_as_a_whole_when_no_page_could_be_read(tmp_path, monkeypatch):
     assert adapter.NOTES == []
 
 
+def test_pdf_with_text_pages_is_retried_when_the_engine_is_down(tmp_path, monkeypatch):
+    # pages with a text layer need no OCR and do not count: a file whose
+    # scanned pages all failed must not be cached with those pages missing
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(FakeOCR, "bad", (1, 2))
+    layers = iter(["a page that carries a text layer of its own", "", ""])
+    monkeypatch.setattr(adapter, "_text_layer", lambda page: next(layers))
+    with pytest.raises(adapter.EngineFailure):
+        adapter.mode_pdf(scan_pdf(tmp_path, 3))
+    assert adapter.NOTES == []
+
+
 def test_ocr_wraps_engine_errors(monkeypatch):
     monkeypatch.setenv("RGA_OCR_ENGINE", "bogus")
     with pytest.raises(adapter.EngineFailure, match="EngineError: unknown engine 'bogus'"):
