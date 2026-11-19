@@ -63,7 +63,7 @@ class WinOcrEngine(Engine):
         if sys.platform != "win32":
             return False, "Windows only"
         if not cls.installed():
-            return False, "pip install 'rga-ocr[winocr]'"
+            return False, cls.install_hint()
         try:
             installed = _installed()
         except Exception as e:  # noqa: BLE001 - a broken WinRT install reads as unavailable

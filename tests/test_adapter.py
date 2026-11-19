@@ -82,13 +82,40 @@ def test_rapidocr_models_resolve():
         assert key, f"{model}: no {version.value} mobile recognition model"
 
 
+def test_heic_without_pi_heif_is_a_retry_not_an_empty_file():
+    """Where pi-heif has no wheels (Python 3.15, Windows on arm64) a HEIC
+    file must not be cached as a file without text."""
+    sample = os.path.join(os.path.dirname(__file__), "data", "shot.heic")
+    # a process of its own: once registered, Pillow keeps the HEIF opener
+    code = (
+        "import sys; sys.modules['pi_heif'] = None\n"          # import raises ImportError
+        "from rga_ocr import adapter\n"
+        "data = open(sys.argv[1], 'rb').read()\n"
+        "assert adapter.is_heif(data)\n"
+        "for d in (data, b'not an image'):\n"
+        "    try:\n"
+        "        adapter.decode(d)\n"
+        "    except Exception as e:\n"
+        "        print(type(e).__name__, e)\n")
+    p = subprocess.run([sys.executable, "-I", "-c", code, sample], capture_output=True, text=True)
+    lines = p.stdout.splitlines()
+    assert len(lines) == 2, p.stdout + p.stderr
+    assert lines[0].startswith("EngineFailure MissingDecoder: HEIC and HEIF need pi-heif"), lines
+    assert lines[1] == "RuntimeError not a decodable image", lines
+
+
 def test_tesseract_language_mapping(monkeypatch, tmp_path):
     from rga_ocr.engines import tesseract as t
     assert t.codes_for([]) == ["eng"]
     assert t.codes_for(["de-DE", "en-US", "de-AT"]) == ["deu", "eng"]
     assert t.codes_for(["zh-TW"]) == ["chi_tra"] and t.codes_for(["zh"]) == ["chi_sim"]
-    with pytest.raises(ValueError, match="no language code known for 'xx'"):
+    with pytest.raises(ValueError, match="no language file known for 'xx'"):
         t.codes_for(["xx"])
+    # Tesseract's own file names pass as they are
+    assert t.codes_for(["frk", "de", "chi_sim_vert"]) == ["frk", "deu", "chi_sim_vert"]
+    # every tag leads to a file that exists (tl once led to tgl, which does not)
+    assert set(t.LANG_CODES.values()) | {"chi_tra"} <= set(t.FILES)
+    assert t.codes_for(["tl"]) == ["fil"]
     assert t.ENGINE.lang_tag(["de", "en"]) == "deu_eng"
     monkeypatch.setenv("TESSDATA_PREFIX", str(tmp_path))
     assert t.find_tessdata(["deu"]) is None

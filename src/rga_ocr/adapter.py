@@ -88,11 +88,18 @@ def decode(data):
     try:
         import pi_heif
         pi_heif.register_heif_opener()
+        heif = True
     except ImportError:
-        pass
+        heif = False
     try:
         src = Image.open(io.BytesIO(data))
     except UnidentifiedImageError:
+        if not heif and is_heif(data):
+            # not the file's fault and gone once pi-heif is there: a retry,
+            # so that the empty result does not stay in the cache
+            raise EngineFailure(MissingDecoder(
+                "HEIC and HEIF need pi-heif, which is not installed here (no wheels for "
+                "Python 3.15 or Windows on arm64 yet); use Python 3.11 to 3.14")) from None
         raise RuntimeError("not a decodable image") from None
     frames = []
     with src:
@@ -118,6 +125,18 @@ def to_rgb(img):
         white = Image.new("RGBA", rgba.size, "white")
         return Image.alpha_composite(white, rgba).convert("RGB")
     return img.convert("RGB")
+
+
+HEIF_BRANDS = (b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1")
+
+
+def is_heif(data):
+    """True for an ISO media file whose brand is one of the HEIF family."""
+    return data[4:8] == b"ftyp" and data[8:12] in HEIF_BRANDS
+
+
+class MissingDecoder(Exception):
+    pass
 
 
 class EngineFailure(Exception):
@@ -356,6 +375,11 @@ def report(event, mode, path, detail=""):
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     path = sys.argv[2] if len(sys.argv) > 2 else ""
+    if mode == "--check":
+        # setup starts the adapter once this way: the interpreter and its
+        # flags found the package, which rga would not tell anyone
+        sys.stdout.write("ok\n")
+        return
     fn = MODES.get(mode)
     if fn is None:
         sys.stderr.write(f"{TAG}: unknown mode {mode!r}\n")

@@ -30,7 +30,9 @@ classifiers = [
 dependencies = [
     "platformdirs>=4",
     "pillow>=10.1",
-    "pi-heif>=0.22",
+    # no wheels for Python 3.15 or for Windows on arm64 yet: without them a
+    # pip install would try to build libheif. HEIC is not read there.
+    "pi-heif>=0.22; python_version < '3.15' and (sys_platform != 'win32' or platform_machine != 'ARM64')",
     "pypdfium2>=4.30",
 ]
 

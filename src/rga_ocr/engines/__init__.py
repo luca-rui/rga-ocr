@@ -68,6 +68,14 @@ class Engine:
         return module_present(*cls.modules)
 
     @classmethod
+    def install_hint(cls):
+        """The reason available() gives when the packages are missing: the
+        command that installs them into this environment (pipx, uv, pip),
+        or under Homebrew the way to an install that can carry them."""
+        from rga_ocr import setup_cmd
+        return setup_cmd.engine_install_hint(cls)
+
+    @classmethod
     def available(cls, langs):
         return False, "not implemented"
 
