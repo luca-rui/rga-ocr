@@ -462,8 +462,8 @@ def test_engine_failure_is_not_cached(tool, tmp_path):
         assert bool(grep(r.err, unreadable)) == (run == 0), r.err
     os.remove(down)
     r = t.search(env=env)
-    assert grep(r.out, r"^(\./)?photo\.png:"), (r.out, r.err)
-    assert grep(r.out, r"^(\./)?bundle\.zip:"), (r.out, r.err)
+    assert grep(r.out, r"^(\.[/\\])?photo\.png:"), (r.out, r.err)
+    assert grep(r.out, r"^(\.[/\\])?bundle\.zip:"), (r.out, r.err)
     assert not grep(r.err, "model fetch failed"), r.err
     assert not grep(r.err, unreadable), r.err
 
