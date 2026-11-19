@@ -636,3 +636,11 @@ def test_vision_needs_macos_13(monkeypatch):
     if sys.platform == "darwin":
         monkeypatch.setattr(platform, "mac_ver", lambda: ("12.7.1", ("", "", ""), ""))
         assert vision.VisionEngine.available([]) == (False, "needs macOS 13 or newer")
+
+
+def test_load_jsonc_accepts_hash_comments_like_rga():
+    text = '# top\n{\n  "accurate": false, # trailing note\n  "a": ["x # y", 2], # last\n}\n'
+    assert sc.load_jsonc(text) == {"accurate": False, "a": ["x # y", 2]}
+    assert sc.load_jsonc("# only a comment") == {}
+    with pytest.raises(ValueError):
+        sc.load_jsonc('{"a": tru # e\n}')

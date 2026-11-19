@@ -395,7 +395,8 @@ def fetch(url, dest, out, timeout=60):
 # --- ripgrep-all config ----------------------------------------------------
 
 def load_jsonc(text):
-    """Parse rga's config.jsonc: JSON with // and /* */ comments and trailing commas."""
+    """Parse rga's config.jsonc: JSON with //, # and /* */ comments and
+    trailing commas (what rga's own parser accepts)."""
     out, i, n = [], 0, len(text)
     while i < n:
         c = text[i]
@@ -405,7 +406,7 @@ def load_jsonc(text):
                 j += 2 if text[j] == "\\" else 1
             out.append(text[i:j + 1])
             i = j + 1
-        elif text.startswith("//", i):
+        elif c == "#" or text.startswith("//", i):
             i = text.find("\n", i)
             i = n if i < 0 else i
         elif text.startswith("/*", i):
@@ -443,10 +444,10 @@ def adapter_entries(binary=None, args=None):
                 "output_path_hint": "${input_virtual_path}" + hint}
     return [
         entry("ocrpdf", "pdf", "PDF text layer via pypdfium2, OCR for pages without one",
-              ["pdf"], ["application/pdf"], ".txt.asciipagebreaks", version=2),
-        entry("ocrimg", "image", "OCR for photos and scans", IMAGE_EXT, IMAGE_MIME, ".txt", version=2),
+              ["pdf"], ["application/pdf"], ".txt.asciipagebreaks", version=3),
+        entry("ocrimg", "image", "OCR for photos and scans", IMAGE_EXT, IMAGE_MIME, ".txt", version=3),
         entry("officexml", "office", "xlsx, pptx, ods, odp text (docx and odt go to pandoc)",
-              OFFICE_EXT, OFFICE_MIME, ".txt.asciipagebreaks"),
+              OFFICE_EXT, OFFICE_MIME, ".txt.asciipagebreaks", version=2),
     ]
 
 

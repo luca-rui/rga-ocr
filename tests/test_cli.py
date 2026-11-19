@@ -114,14 +114,70 @@ def test_run_config_replaces_entries_of_another_installation(rga_cfg, tmp_path):
     assert rga_cfg.read_text(encoding="utf-8") == text
 
 
-def test_run_config_stays_out_of_the_way(rga_cfg, tmp_path):
+def test_run_config_stays_out_of_the_way(rga_cfg, tmp_path, capsys):
     # the caller's own --rga-config-file wins, whatever rga's config holds
     assert cli.run_config(["--rga-config-file=/x/c.jsonc"], str(tmp_path)) is None
-    # a config that does not parse is rga's to report
+    assert capsys.readouterr().err == ""
+    # a config that cannot be read here is left to rga, with a word on why
+    # the adapter entries are not put in
     for text in ("{ not json", "[]", '{"custom_adapters": "x"}', '{"custom_adapters": ["x"]}'):
         rga_cfg.write_text(text, encoding="utf-8")
         assert cli.run_config([], str(tmp_path)) is None
+        err = capsys.readouterr().err
+        assert err.count("\n") == 1 and "cannot read " + str(rga_cfg) in err, err
     assert os.listdir(tmp_path) == ["rga"]
+
+
+def test_run_config_reads_a_config_with_hash_comments(rga_cfg, tmp_path, capsys):
+    # rga accepts "#" comments; the run must still get its adapter entries
+    rga_cfg.write_text('# mine\n{"max_archive_recursion": 2, # deep enough\n}\n', encoding="utf-8")
+    got = cli.run_config([], str(tmp_path))
+    assert got and capsys.readouterr().err == ""
+    with open(got, encoding="utf-8") as f:
+        assert json.load(f)["max_archive_recursion"] == 2
+
+
+def test_forget_failed_drops_the_rows_of_failed_files(tmp_path):
+    import sqlite3
+    if sqlite3.sqlite_version_info < (3, 38):
+        pytest.skip("rga's schema needs SQLite 3.38 (strict tables, unixepoch)")
+    d = str(tmp_path / "vision-auto")
+    held = cli.prepare_cache(d)
+    root = os.path.join(os.path.abspath(os.sep), "docs")
+    rows = [("ocrpdf", os.path.join(root, "bad.pdf")), ("ocrpdf", os.path.join(root, "good.pdf")),
+            ("ocrpdf", os.path.join(root, "bad.pdf2")), ("zip", os.path.join(root, "sub", "box.zip")),
+            ("zip", os.path.join(root + "2", "box.zip"))]
+
+    def fill():
+        held.execute("delete from preproc_cache")
+        for adapter_name, f in rows:
+            held.execute("insert into preproc_cache (config_hash, adapter, adapter_version, active_adapters, "
+                         "file_path, file_mtime_unix_ms, text_content_zstd) values ('h', ?, 1, 'x', ?, 0, x'00')",
+                         (adapter_name, f))
+        held.commit()
+
+    def left():
+        return [r[0] for r in held.execute("select file_path from preproc_cache order by rowid")]
+
+    # a file on disk: reported with rga's "/./" after the search root
+    fill()
+    cli.forget_failed(held, [os.path.join(root, ".", "bad.pdf")], root)
+    assert left() == [f for _a, f in rows[1:]]
+    # an archive member: reported by its inner path, so the archive rows
+    # below the search root go, and nothing else
+    fill()
+    cli.forget_failed(held, [os.path.join("inner", "scan.png")], root)
+    assert left() == [f for _a, f in rows[:3] + rows[4:]]
+    # the search root is the archive itself
+    fill()
+    cli.forget_failed(held, ["inner/scan.png"], rows[3][1])
+    assert left() == [f for _a, f in rows[:3] + rows[4:]]
+    fill()
+    cli.forget_failed(held, [], root)
+    cli.forget_failed(None, [rows[1][1]], root)
+    assert len(left()) == 5
+    held.close()
+    cli.forget_failed(held, [rows[1][1]], root)   # a closed or broken database costs only the retry
 
 
 @pytest.mark.parametrize("flag,key,value", [

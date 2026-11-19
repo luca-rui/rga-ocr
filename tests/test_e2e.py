@@ -397,6 +397,21 @@ def test_progress_switches(tool):
         os.remove(tool.profile)
 
 
+def test_transparent_image_is_read(tool, tmp_path):
+    """Dark text on a transparent background, through the real engine."""
+    import make_fixtures
+    d = tmp_path / "alpha"
+    d.mkdir()
+    from PIL import Image
+    ink = make_fixtures.text_image("Wartungsvertrag Kesselanlage").convert("L").point(lambda v: 255 if v < 128 else 0)
+    img = Image.new("RGBA", ink.size, (0, 0, 0, 0))
+    img.putalpha(ink)                                   # black everywhere, opaque where the text is
+    img.save(str(d / "clear.png"))
+    # --no-cache: a folder outside the fixture tree must not show in the shared cache
+    r = tool.run("--no-cache", "Kesselanlage", str(d))
+    assert r.code == 0 and grep(r.out, r"clear\.png:1:.*Kesselanlage"), (r.out, r.err)
+
+
 # ------------------------------------------------------------- adapter errors
 
 def broken_dir(tool):
@@ -415,6 +430,42 @@ def test_adapter_error_forwarded(tool):
     assert r.code == 0, (r.out, r.err)
     assert grep(r.err, "^" + re.escape(P) + r": adapter pdf failed on broken\.pdf: "), r.err
     assert grep(r.out, r"a\.txt:1:needle here"), r.out
+
+
+def test_engine_failure_is_not_cached(tool, tmp_path):
+    """While the OCR engine fails (a model download without network), files
+    produce no text. That must not stay in the cache: once the engine works,
+    the same search finds them, on disk and inside an archive."""
+    t = Tool(str(tmp_path / "down"))
+    os.makedirs(t.fx)
+    for name in ("photo.png", "bundle.zip"):
+        shutil.copy(os.path.join(tool.fx, name), t.fx)
+    with open(os.path.join(t.fx, "broken.pdf"), "w") as f:
+        f.write("this is not a pdf\n")
+    cfg = spy_config()
+    for a in cfg["custom_adapters"]:
+        a["args"] = [os.path.join(HERE, "failing_engine_adapter.py") if x.endswith("spy_adapter.py") else x
+                     for x in a["args"]]
+    with open(t.rga_config, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    down = os.path.join(t.root, "engine-down")
+    env = {"ADAPTER_ENGINE_DOWN": down}
+    failed = "^" + re.escape(P) + r": adapter image failed on photo\.png: OSError: model fetch failed \(not cached"
+    unreadable = "^" + re.escape(P) + r": adapter pdf failed on broken\.pdf: "
+    open(down, "w").close()
+    member = "^" + re.escape(P) + r": adapter image failed on needle\.jpg: OSError: model fetch failed \(not cached"
+    for run in range(2):                     # the second run does not answer from the cache
+        r = t.search(env=env)
+        assert not grep(r.out, r"photo\.png|needle\.jpg"), r.out
+        assert grep(r.err, failed) and grep(r.err, member), r.err
+        # a file that cannot be opened is reported once, then cached as empty
+        assert bool(grep(r.err, unreadable)) == (run == 0), r.err
+    os.remove(down)
+    r = t.search(env=env)
+    assert grep(r.out, r"^(\.[/\\])?photo\.png:"), (r.out, r.err)
+    assert grep(r.out, r"^(\.[/\\])?bundle\.zip:"), (r.out, r.err)
+    assert not grep(r.err, "model fetch failed"), r.err
+    assert not grep(r.err, unreadable), r.err
 
 
 # ------------------------------------------------------------- profile
@@ -451,10 +502,15 @@ def test_profile(tool):
 # ------------------------------------------------------------- cache
 
 def test_cache_info_and_clear(tool):
-    # populate: default cache, a forced one, and an entry under <root>/broken
+    # populate: default cache, a forced one, and an entry under <root>/extra
+    # (a file whose adapter run failed leaves no entry)
     assert tool.search().code == 0
     assert tool.run("--force-ocr", NEEDLE, ".").code == 0
     assert tool.run("needle", broken_dir(tool)).code == 0
+    extra = os.path.join(tool.root, "extra")
+    os.makedirs(extra, exist_ok=True)
+    shutil.copy(os.path.join(tool.fx, "textlayer.pdf"), extra)
+    assert tool.run(NEEDLE, extra).code == 0
     auto, force = cache_tag(), cache_tag(force=True)
     id_auto, id_force = cache_id(auto), cache_id(force)
     lang_auto = re.escape(auto[len(engine_name()) + 1:])      # the LANG column
@@ -467,9 +523,9 @@ def test_cache_info_and_clear(tool):
     assert grep(out, r"^CACHE-ID +ENGINE +LANG +FORCE +ENTRIES +SIZE +LAST ADDED +FOLDERS$"), out
     row = "^" + id_auto + " +" + engine_name() + " +" + lang_auto + " +no "
     assert grep(out, row + r"+[1-9][0-9]* +[0-9]+\.[0-9] MB  20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}  "), out
-    # the broken-pdf entry sits under <root>/broken, so the common parent is <root>
+    # the extra entry sits under <root>/extra, so the common parent is <root>
     parent = os.path.dirname(os.path.realpath(tool.fx))
-    folders = re.escape(os.path.join(parent, "{fixtures (")) + r"[0-9]+\), broken \(1\)\}$"
+    folders = re.escape(os.path.join(parent, "{fixtures (")) + r"[0-9]+\), (broken \(1\), )?extra \(1\)\}$"
     assert grep(out, "^" + id_auto + " .*  " + folders), out
     assert grep(out, "^" + id_force + " +" + engine_name() + " +" + lang_auto + r" +yes +[1-9][0-9]* +"), out
 

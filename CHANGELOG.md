@@ -6,7 +6,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- PDF text layer: the words of a line come out in the order they are
+  printed. Lines set in more than one font or size (a bold word, a
+  superscript) were shuffled and words were split at kerning pairs, so a
+  phrase search could miss text that is in the file. The text now follows
+  PDFium's reading order.
+- A file the OCR engine failed on (a model download without network,
+  missing language data, an engine that does not start) is no longer cached
+  as empty and skipped from then on. It is read again on the next search,
+  and the warning says so. When such a file sits inside an archive, the
+  archives below the search root are read again.
+- A PDF with a page that cannot be OCR'd keeps the text of its other
+  pages; a warning gives their number and the first of them, once. When no page can
+  be OCR'd, the file counts as an engine failure and is read again on the
+  next search.
+- xlsx, pptx, ods, odp: a word split over several text runs stays one word
+  ("Kesselanlage", not "Kessel anlage"), and the numeric cells of a row
+  are separated ("12 34", not "1234").
+- Images with transparency are placed on white before OCR. Dark text on a
+  transparent background was read as black on black and gave no text.
+- An rga config with `#` comments, which rga accepts, is read. Before,
+  every search ended in `Unknown adapter: "ocrpdf"` unless
+  `rga-ocr setup --apply` had been run.
+- README: the quick start named `rga-ocr[vision]` for every platform; that
+  extra installs an engine on macOS only.
+
+### Changed
+
+- The cache versions of the three adapters went up, because their output
+  changed. Cached text from earlier releases is not used any more: the
+  first search over a folder after the upgrade reads and OCRs its files
+  again. `rga-ocr --clear-cache all` removes the old entries.
+- A warning says so when rga's config cannot be read and the search runs
+  without this installation's adapter entries.
 
 ## [0.2.2] - 2026-11-19
 

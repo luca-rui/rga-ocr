@@ -165,3 +165,209 @@ def test_winocr_cache_tag_names_the_pack_that_does_the_work(monkeypatch):
         raise OSError("no WinRT")
     monkeypatch.setattr(w, "_installed", broken)
     assert w.ENGINE.lang_tag(["de", "en"]) == "de_en"
+
+
+# ------------------------------------------------------- PDF text layer
+
+def test_pdf_text_layer_keeps_the_words_of_a_line_in_order(tmp_path, monkeypatch):
+    """One printed line set in several font sizes: the boxes differ in top
+    and height, the words must still come out left to right."""
+    import make_fixtures
+    path = str(tmp_path / "mixed.pdf")
+    line1 = [(50, 700, 12, "For"), (80, 700, 9, "use on"), (120, 700, 16, "Apple-branded"),
+             (240, 700, 10, "Systems")]
+    line2 = [(50, 682, 9, "and"), (75, 682, 14, "nothing"), (135, 682, 10, "else whatsoever")]
+    make_fixtures.write_pdf(path, [{"width": 595, "height": 842, "lines": line1 + line2}])
+    monkeypatch.setenv("RGA_OCR_NO_OCR", "1")
+    with open(path, "rb") as f:
+        text = adapter.mode_pdf(f.read())
+    assert text == "For use on Apple-branded Systems and nothing else whatsoever"
+
+
+def test_paragraphs_ordered_keeps_reading_order_and_splits_at_a_column_jump():
+    # two columns: the second starts back at the top of the page
+    lines = [(0.10, 0.1, 0.02, "left one"), (0.125, 0.1, 0.02, "left two"),
+             (0.10, 0.6, 0.02, "right one"), (0.125, 0.6, 0.02, "right two")]
+    assert adapter.paragraphs(lines, ordered=True) == "left one left two\nright one right two"
+
+
+class FakeOCR:
+    """Stands in for adapter.OCR; fails on the pages named in bad."""
+    bad = ()
+
+    def __init__(self):
+        self.calls = 0
+
+    def text(self, img):
+        self.calls += 1
+        if self.calls in self.bad:
+            raise adapter.EngineFailure(OSError("model fetch failed"))
+        return f"scan {self.calls}"
+
+
+def scan_pdf(tmp_path, pages):
+    import make_fixtures
+    jpeg = make_fixtures.jpeg_bytes(make_fixtures.text_image("x"))
+    path = str(tmp_path / "scan.pdf")
+    make_fixtures.write_pdf(path, [{"width": 595, "height": 842, "jpeg": jpeg}] * pages)
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def test_pdf_keeps_the_pages_read_when_one_page_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(FakeOCR, "bad", (2,))
+    pages = adapter.mode_pdf(scan_pdf(tmp_path, 3)).split(adapter.PAGE_BREAK)
+    assert pages == ["scan 1", "", "scan 3"]
+    assert len(adapter.NOTES) == 1
+    assert adapter.NOTES[0].startswith("OCR failed on 1 of 3 pages, first page 2: OSError: model fetch failed")
+
+
+def test_pdf_fails_as_a_whole_when_no_page_could_be_read(tmp_path, monkeypatch):
+    # the engine is the problem then, not one page
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(FakeOCR, "bad", (1, 2))
+    with pytest.raises(adapter.EngineFailure, match="OSError: model fetch failed"):
+        adapter.mode_pdf(scan_pdf(tmp_path, 2))
+    assert adapter.NOTES == []
+
+
+def test_pdf_with_text_pages_is_retried_when_the_engine_is_down(tmp_path, monkeypatch):
+    # pages with a text layer need no OCR and do not count: a file whose
+    # scanned pages all failed must not be cached with those pages missing
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(FakeOCR, "bad", (1, 2))
+    layers = iter(["a page that carries a text layer of its own", "", ""])
+    monkeypatch.setattr(adapter, "_text_layer", lambda page: next(layers))
+    with pytest.raises(adapter.EngineFailure):
+        adapter.mode_pdf(scan_pdf(tmp_path, 3))
+    assert adapter.NOTES == []
+
+
+def test_ocr_wraps_engine_errors(monkeypatch):
+    monkeypatch.setenv("RGA_OCR_ENGINE", "bogus")
+    with pytest.raises(adapter.EngineFailure, match="EngineError: unknown engine 'bogus'"):
+        adapter.OCR()
+
+    class Broken(adapter.OCR):
+        def __init__(self):
+            class Engine:
+                def recognize(self, img):
+                    raise OSError("no\nmodel")
+            self.engine = Engine()
+    with pytest.raises(adapter.EngineFailure, match="OSError: no model"):
+        Broken().text(None)
+
+
+def run_main(monkeypatch, tmp_path, mode, data):
+    """adapter.main() on data; returns (output, report events)."""
+    report = tmp_path / "report"
+    monkeypatch.setattr(adapter, "REPORT", str(report))
+    monkeypatch.setattr(sys, "argv", ["adapter", mode, "/x/file"])
+
+    class Stdin:
+        buffer = __import__("io").BytesIO(data)
+    monkeypatch.setattr(sys, "stdin", Stdin)
+    out = []
+    monkeypatch.setattr(adapter, "write_out", out.append)
+    adapter.main()
+    return out, [l.split("\t")[0] for l in report.read_text(encoding="utf-8").splitlines()]
+
+
+def test_adapter_reports_engine_failures_as_retry_and_unreadable_files_as_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(FakeOCR, "bad", (1, 2))
+    assert run_main(monkeypatch, tmp_path, "pdf", scan_pdf(tmp_path, 2)) == ([], ["start", "retry", "done"])
+    (tmp_path / "report").unlink()
+    assert run_main(monkeypatch, tmp_path, "pdf", b"this is not a pdf") == ([], ["start", "error", "done"])
+    (tmp_path / "report").unlink()
+    assert run_main(monkeypatch, tmp_path, "image", b"not an image") == ([], ["start", "error", "done"])
+
+
+def test_adapter_reports_a_partial_result(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(FakeOCR, "bad", (1,))
+    out, events = run_main(monkeypatch, tmp_path, "pdf", scan_pdf(tmp_path, 2))
+    assert out == [adapter.PAGE_BREAK + "scan 2"]
+    assert events == ["start", "partial", "done"]
+
+
+# --------------------------------------------------- transparent images
+
+@pytest.mark.parametrize("mode", ["RGBA", "LA", "PA", "P"])
+def test_decode_puts_transparent_images_on_white(mode):
+    """Dark text on a transparent background: a plain convert("RGB") shows
+    the colour under the alpha channel, black on black."""
+    import io
+    from PIL import Image
+    img = Image.new("RGBA", (40, 20), (0, 0, 0, 0))
+    for x in range(10, 20):
+        img.putpixel((x, 10), (0, 0, 0, 255))
+    buf = io.BytesIO()
+    if mode == "P":
+        pal = Image.new("P", img.size, 0)
+        pal.putpalette([0, 0, 0, 0, 0, 0])              # both entries black
+        for x in range(10, 20):
+            pal.putpixel((x, 10), 1)
+        pal.save(buf, "PNG", transparency=0)            # entry 0 is transparent
+    elif mode != "PA":
+        img.convert(mode).save(buf, "PNG")
+    if mode == "PA":
+        # PNG cannot hold PA; it reaches to_rgb from other containers. Built
+        # by hand: older Pillow drops the alpha in convert("PA").
+        pa = Image.new("P", img.size, 0)
+        pa.putpalette([0, 0, 0])
+        pa.putalpha(img.getchannel("A"))
+        assert pa.mode == "PA"
+        frame = adapter.to_rgb(pa)
+    else:
+        frame = adapter.decode(buf.getvalue())[0]
+    assert frame.mode == "RGB"
+    assert frame.getpixel((0, 0)) == (255, 255, 255)
+    assert frame.getpixel((15, 10)) == (0, 0, 0)
+
+
+# --------------------------------------------------------------- office
+
+def office(members):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, body in members.items():
+            z.writestr(name, body)
+    return adapter.mode_office(buf.getvalue())
+
+
+def test_office_runs_of_one_word_stay_one_word():
+    slide = ('<p:sld><a:p><a:r><a:t>Kessel</a:t></a:r><a:r><a:t>anlage und</a:t></a:r>'
+             '<a:r><a:t> Wartung</a:t></a:r><a:br/><a:r><a:t>Zeile zwei</a:t></a:r></a:p>'
+             '<a:p><a:r><a:t>Absatz</a:t></a:r></a:p></p:sld>')
+    assert office({"ppt/slides/slide1.xml": slide}) == "Kesselanlage und Wartung Zeile zwei\nAbsatz"
+    shared = '<sst><si><r><t>Kessel</t></r><r><t>anlage</t></r></si><si><t>Zweite</t></si></sst>'
+    sheet = '<worksheet><sheetData><row><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    assert office({"xl/workbook.xml": "", "xl/sharedStrings.xml": shared,
+                   "xl/worksheets/sheet1.xml": sheet}) == "Kesselanlage\nZweite"
+    odp = ('<office:document-content><draw:page><text:p>Kessel<text:span>anlage</text:span>'
+           '<text:s/>und<text:tab/>Wartung<text:line-break/>neu</text:p></draw:page>'
+           '</office:document-content>')
+    assert office({"content.xml": odp}) == "Kesselanlage und Wartung neu"
+
+
+def test_office_cells_of_a_row_stay_apart():
+    sheet = ('<worksheet><sheetData>'
+             '<row><c r="A1"><v>12</v></c><c r="B1"><v>34</v></c><c r="C1" s="2"/>'
+             '<c r="D1" t="s"><v>0</v></c><c r="E1"><f>A1+B1</f><v>46</v></c>'
+             '<c r="F1" t="inlineStr"><is><t>frei</t></is></c><c r="G1"><v>7</v></c></row>'
+             '<row><c r="A2"><v>56</v></c></row></sheetData></worksheet>')
+    assert office({"xl/workbook.xml": "", "xl/worksheets/sheet1.xml": sheet}) == "12 34 A1+B1 46 frei 7\n56"
+    ods = ('<office:document-content><table:table><table:table-row>'
+           '<table:table-cell><text:p>12</text:p></table:table-cell>'
+           '<table:table-cell><text:p>34</text:p></table:table-cell>'
+           '</table:table-row></table:table></office:document-content>')
+    assert office({"content.xml": ods}).split() == ["12", "34"]

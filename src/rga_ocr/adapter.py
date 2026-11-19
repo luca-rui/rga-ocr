@@ -22,8 +22,11 @@ Environment (set by rga-ocr from the profile, flags, or directly):
   RGA_OCR_MAX_PIXELS      longest image side handed to the OCR engine (3000)
   RGA_OCR_PARAGRAPH_GAP   line gap, in line heights, that starts a new output line (0.7)
   RGA_OCR_REPORT          path of a report file: one line is appended when a file
-                          starts, one when it is done, one per error (rga-ocr's
-                          status line and error forwarding read it)
+                          starts, one when it is done, and one per error (the
+                          file cannot be read), retry (the OCR engine failed;
+                          rga-ocr drops the file from the cache so that it is
+                          read again) or partial (some PDF pages could not be
+                          OCR'd; the rest stays cached)
 
 Rules: never open the virtual path (archive members do not exist on disk),
 never exit non-zero (rg would abort with exit 2), never emit NUL bytes.
@@ -94,9 +97,7 @@ def decode(data):
     frames = []
     with src:
         for frame in ImageSequence.Iterator(src):
-            img = ImageOps.exif_transpose(frame)
-            if img.mode != "RGB":
-                img = img.convert("RGB")
+            img = to_rgb(ImageOps.exif_transpose(frame))
             if max(img.size) > MAX_PIXELS:
                 img.thumbnail((MAX_PIXELS, MAX_PIXELS))
             else:
@@ -105,40 +106,80 @@ def decode(data):
     return frames
 
 
+def to_rgb(img):
+    """An RGB copy of img with transparent areas white. A plain convert drops
+    the alpha channel and shows whatever colour lies under it, usually black:
+    dark text on a transparent background would turn black on black."""
+    if img.mode == "RGB":
+        return img
+    if img.mode in ("RGBA", "LA", "PA", "La", "RGBa") or "transparency" in img.info:
+        from PIL import Image
+        rgba = img.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, "white")
+        return Image.alpha_composite(white, rgba).convert("RGB")
+    return img.convert("RGB")
+
+
+class EngineFailure(Exception):
+    """The OCR engine could not start or could not read an image the adapter
+    decoded: a problem of this run (a model download without network, missing
+    language data), not of the file. Reported as "retry", so that the file's
+    empty result does not stay in the cache."""
+
+    def __init__(self, cause):
+        super().__init__(f"{cause.__class__.__name__}: {cause}".replace("\n", " "))
+
+
 class OCR:
     """The configured engine plus paragraph grouping of its lines."""
 
     def __init__(self):
         from rga_ocr import engines
-        langs = engines.parse_langs(os.environ.get(ENV_PREFIX + "LANG"))
-        name = os.environ.get(ENV_PREFIX + "ENGINE", "").strip() or "auto"
-        self.engine = engines.resolve(name, langs)(langs)
+        try:
+            langs = engines.parse_langs(os.environ.get(ENV_PREFIX + "LANG"))
+            name = os.environ.get(ENV_PREFIX + "ENGINE", "").strip() or "auto"
+            self.engine = engines.resolve(name, langs)(langs)
+        except Exception as e:  # noqa: BLE001
+            raise EngineFailure(e) from e
 
     def text(self, img):
-        return paragraphs(self.engine.recognize(img))
+        try:
+            lines = self.engine.recognize(img)
+        except Exception as e:  # noqa: BLE001
+            raise EngineFailure(e) from e
+        return paragraphs(lines)
 
     def text_of_bytes(self, data):
         """OCR every frame of an encoded image; returns list of texts."""
         return [self.text(img) for img in decode(data)]
 
 
-def paragraphs(lines):
+def paragraphs(lines, ordered=False):
     """Join lines that sit directly beneath each other into one line.
-    lines: (top, x, height, text) in a top-down frame normalised to 0..1."""
+    lines: (top, x, height, text) in a top-down frame normalised to 0..1.
+    ordered: the lines are in reading order already (PDF text layer); they are
+    not sorted by position, and a jump back up the page (next column) starts
+    a new output line."""
     if not lines:
         return ""
-    lines = sorted(lines, key=lambda l: (l[0], l[1]))
+    if not ordered:
+        lines = sorted(lines, key=lambda l: (l[0], l[1]))
     out, cur = [], [lines[0][3]]
     prev_top, _, prev_h, _ = lines[0]
     prev_bottom = prev_top + prev_h
     for top, _x, h, s in lines[1:]:
         gap = top - prev_bottom
-        if gap < PARAGRAPH_GAP * max(prev_h, h):
+        if ordered:
+            joined = -(prev_h + h) < gap < PARAGRAPH_GAP * max(prev_h, h)
+            prev_bottom = top + h
+        else:
+            joined = gap < PARAGRAPH_GAP * max(prev_h, h)
+            prev_bottom = max(prev_bottom, top + h) if gap < 0 else top + h
+        if joined:
             cur.append(s)
         else:
             out.append("\n".join(cur))
             cur = [s]
-        prev_bottom = max(prev_bottom, top + h) if gap < 0 else top + h
         prev_h = h
     out.append("\n".join(cur))
     return "\n".join(clean(p) for p in out if p.strip())
@@ -147,21 +188,53 @@ def paragraphs(lines):
 # ---------------------------------------------------------------- modes
 
 def _text_layer(page):
-    """The text lines of a PDF page, grouped like OCR output: one tuple per
-    pdfium text rectangle in the (top, x, height, text) frame paragraphs()
-    expects (top-down, normalised to 0..1)."""
+    """The text layer of a PDF page in PDFium's reading order, wrapped lines
+    joined like OCR output.
+
+    PDFium's own line assembly is used for the words: its text rectangles
+    (one per run of equal font) split words at kerning pairs and differ in
+    top and height within one printed line, so ordering them by position
+    shuffles the words. The character boxes only supply each line's position
+    for the paragraph grouping."""
     width, height = page.get_size()
     tp = page.get_textpage()
     try:
-        lines = []
-        for i in range(tp.count_rects()):
-            left, bottom, right, top = tp.get_rect(i)
-            s = tp.get_text_bounded(left=left, bottom=bottom, right=right, top=top).strip()
-            if s:
-                lines.append(((height - top) / height, left / width, (top - bottom) / height, s))
+        # explicit range: with the defaults pypdfium2 4.x reads by bounds,
+        # which gives other positions and \x02 as the hyphen mark
+        text = tp.get_text_range(0, tp.count_chars())
+        lines, pos = [], 0
+        # U+FFFE: PDFium's marker for a hyphen at a line end, the next printed
+        # line follows without a line break.
+        for part in re.split(r"(\r\n|\n|\r|\ufffe|\x02)", text):
+            units = len(part.encode("utf-16-le")) // 2      # char indices are UTF-16 units
+            if part in ("\ufffe", "\x02") and lines:
+                lines[-1][3] += "-"
+            elif part.strip():
+                box = _line_box(tp, pos, units)
+                if box:
+                    left, bottom, right, top = box
+                    lines.append([(height - top) / height, left / width,
+                                  (top - bottom) / height, part.strip()])
+            pos += units
     finally:
         tp.close()
-    return paragraphs(lines)
+    return paragraphs(lines, ordered=True)
+
+
+def _line_box(tp, start, count):
+    """Bounding box (left, bottom, right, top) of the visible characters in
+    one text-layer line, or None."""
+    box = None
+    for i in range(start, start + count):
+        try:
+            left, bottom, right, top = tp.get_charbox(i)
+        except Exception:  # noqa: BLE001  generated characters have no box
+            continue
+        if right <= left or top <= bottom:
+            continue
+        box = (left, bottom, right, top) if box is None else (
+            min(box[0], left), min(box[1], bottom), max(box[2], right), max(box[3], top))
+    return box
 
 
 def mode_pdf(data):
@@ -169,24 +242,32 @@ def mode_pdf(data):
     no_ocr = os.environ.get(ENV_PREFIX + "NO_OCR") == "1"
     force = not no_ocr and os.environ.get(ENV_PREFIX + "FORCE_OCR") == "1"
     ocr = None
-    pages = []
+    pages, failed, tried = [], [], 0
     doc = pypdfium2.PdfDocument(data)
     try:
-        for page in doc:
+        for number, page in enumerate(doc, 1):
             layer = _text_layer(page)
             if not no_ocr and (force or len(layer.replace(" ", "")) < MIN_TEXT_CHARS):
                 if ocr is None:
                     ocr = OCR()
                 scale = min(RENDER_DPI / 72, MAX_PIXELS / max(page.get_size()))
-                img = page.render(scale=scale).to_pil()
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                text = ocr.text(img)
+                tried += 1
+                try:
+                    text = ocr.text(to_rgb(page.render(scale=scale).to_pil()))
+                except EngineFailure as e:
+                    failed.append((number, e))
+                    text = ""
                 layer = (layer + "\n" + text).strip() if force else text
             pages.append(layer)
             page.close()
     finally:
         doc.close()
+    if failed:
+        number, e = failed[0]
+        if len(failed) == tried:
+            # no page could be OCR'd: the engine is the problem, not one page
+            raise e
+        NOTES.append(f"OCR failed on {len(failed)} of {tried} pages, first page {number}: {e}")
     return PAGE_BREAK.join(pages)
 
 
@@ -195,9 +276,19 @@ def mode_image(data):
     return "\n\n".join(t for t in texts if t)
 
 
-def _strip_xml(raw, para_tags, cell_sep=" "):
+# Elements that stand for white space, and the ends of the cells of one row
+# (xlsx value/formula/inline string, ods/odp table cell, pptx table cell).
+# Text runs (a:t, t, text:span) get no separator: one word is often split
+# over several runs (a spelling mark, a change of format).
+_XML_SPACE = r"<(?:text:s|text:tab|text:line-break|a:br|a:tab|w:tab|w:br)\b[^>]*>"
+_XML_CELL_END = r"</(?:c|table:table-cell|a:tc)>|<(?:c|table:table-cell)\b[^>]*/>"
+
+
+def _strip_xml(raw, para_tags):
     raw = re.sub(r"</(?:%s)>" % "|".join(para_tags), "\n", raw)
-    raw = re.sub(r"</(?:w:t|a:t|t|text:span)>", cell_sep, raw)
+    raw = re.sub(_XML_SPACE, " ", raw)
+    raw = re.sub(_XML_CELL_END, " ", raw)
+    raw = re.sub(r"</f>", " ", raw)                  # xlsx: formula, then its value
     raw = re.sub(r"<[^>]+>", "", raw)
     raw = html.unescape(raw)
     lines = [clean(l) for l in raw.split("\n")]
@@ -242,6 +333,7 @@ MODES = {"pdf": mode_pdf, "image": mode_image, "office": mode_office}
 
 
 REPORT = os.environ.get(ENV_PREFIX + "REPORT", "")
+NOTES = []      # problems that left part of a file unread; reported as "partial"
 
 
 def report(event, mode, path, detail=""):
@@ -250,7 +342,8 @@ def report(event, mode, path, detail=""):
     if not REPORT:
         return
     try:
-        fd = os.open(REPORT, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        # O_BINARY: Windows would write "\r\n" and leave a "\r" on every detail
+        fd = os.open(REPORT, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
         try:
             line = f"{event}\t{mode}\t{path}\t{detail}\n".replace("\r", " ")
             os.write(fd, line.encode("utf-8", "replace")[:4000])
@@ -273,6 +366,12 @@ def main():
     report("start", mode, path)
     try:
         write_out(fn(data))
+        for note in NOTES:
+            sys.stderr.write(f"{TAG}[{mode}]: {note}\n")
+            report("partial", mode, path, note)
+    except EngineFailure as e:
+        sys.stderr.write(f"{TAG}[{mode}]: {e}\n")
+        report("retry", mode, path, str(e))
     except Exception as e:  # noqa: BLE001
         msg = f"{e.__class__.__name__}: {e}".replace("\n", " ")
         sys.stderr.write(f"{TAG}[{mode}]: {msg}\n")

@@ -46,7 +46,9 @@ Quick start everywhere else, once `rga`, `rg` and `pandoc` are installed
 (see Install):
 
 ```
-pipx install "rga-ocr[vision]"   # or [winocr], [rapidocr], [tesseract]
+pipx install "rga-ocr[rapidocr]"   # Linux
+pipx install "rga-ocr[winocr]"     # Windows
+pipx install "rga-ocr[vision]"     # macOS without Homebrew
 rga-ocr "maintenance contract" ~/Documents
 ```
 
