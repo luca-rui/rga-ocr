@@ -6,7 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- The README names Homebrew as the first way to install on macOS:
+  `brew install luca-rui/tap/rga-ocr`.
 
 ## [0.2.1] - 2026-11-18
 

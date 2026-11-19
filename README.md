@@ -34,7 +34,17 @@ friends via pandoc, zip/tar/gz/xz/bz2/zst archives, sqlite, optionally
 mail and ffmpeg metadata. OCR results are cached, so the second search of a
 folder takes a fraction of a second.
 
-Quick start, once `rga`, `rg` and `pandoc` are installed (see Install):
+Quick start on macOS with [Homebrew](https://brew.sh), which pulls `rga`,
+`rg`, `pandoc`, a Python and the Vision engine:
+
+```
+brew install luca-rui/tap/rga-ocr
+rga-ocr setup --apply
+rga-ocr "maintenance contract" ~/Documents
+```
+
+Quick start everywhere else, once `rga`, `rg` and `pandoc` are installed
+(see Install):
 
 ```
 pipx install "rga-ocr[vision]"   # or [winocr], [rapidocr], [tesseract]
@@ -66,6 +76,20 @@ does not, and which `auto` picks. `--engine NAME`, the profile key
 per engine and language, so switching engines never serves stale text.
 
 ## Install
+
+### macOS with Homebrew
+
+```
+brew install luca-rui/tap/rga-ocr
+rga-ocr setup --apply
+```
+
+The formula lives in the tap
+[luca-rui/homebrew-tap](https://github.com/luca-rui/homebrew-tap). It
+installs ripgrep, ripgrep-all, pandoc and its own Python, and ships the
+Vision engine only. For another engine use the PyPI install below instead.
+
+### Every platform, from PyPI
 
 1. Install the tools. `rga-ocr setup` prints the command for your package
    manager; in short:
@@ -126,6 +150,9 @@ pipx upgrade rga-ocr        # or pip install -U in the venv
 rga-ocr setup --apply       # refreshes the adapter entries when their version changed
 ```
 
+With Homebrew it is `brew upgrade rga-ocr`, followed by the same
+`setup --apply` line.
+
 The cache key is the file plus the adapter `version`. The engine package
 version and the tuning variables below are not part of it, so after
 upgrading an engine package or changing a tuning variable, clear the
@@ -136,7 +163,7 @@ get fresh text.
 
 ```
 rga-ocr setup --remove      # takes the three adapters out of rga's config
-pipx uninstall rga-ocr      # or uv tool uninstall rga-ocr
+pipx uninstall rga-ocr      # or uv tool uninstall rga-ocr, or brew uninstall rga-ocr
 ```
 
 `setup --remove` keeps a backup copy of rga's `config.jsonc`, as `--apply`
