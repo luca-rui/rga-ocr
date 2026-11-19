@@ -73,10 +73,19 @@ def test_cold_run(tool):
 # rga's config path redirected to argv[1]: the CLI without --rga-config-file,
 # and without touching the config of the user who runs the suite. That only
 # moves where the tool looks; blind_rga() below does the same for rga.
+# The script also says on stderr whether the run wrote its own config: on
+# Windows that line is what tells a run that brought its entries from one
+# that found them in a config already on the machine.
 NO_SETUP = ("import sys\n"
             "from rga_ocr import cli, paths\n"
             "cfg = sys.argv[1]\n"
             "paths.rga_config_path = lambda: cfg\n"
+            "real = cli.run_config\n"
+            "def run_config(passed, run_dir):\n"
+            "    own = real(passed, run_dir)\n"
+            "    print('own-config:', 'yes' if own else 'no', file=sys.stderr)\n"
+            "    return own\n"
+            "cli.run_config = run_config\n"
             "sys.exit(cli.main(sys.argv[2:]))\n")
 
 
@@ -117,6 +126,7 @@ def test_search_without_setup(tool, tmp_path):
     absent = tmp_path / "absent.jsonc"
     code, out, err = search(absent)
     assert code == 0 and "photo.png" in out, (code, out, err)
+    assert "own-config: yes" in err, err
     assert not absent.exists()
 
     # entries that point at an interpreter that is gone, next to a foreign adapter
@@ -132,6 +142,7 @@ def test_search_without_setup(tool, tmp_path):
     cfg.write_text(text, encoding="utf-8")
     code, out, err = search(cfg)
     assert code == 0 and "photo.png" in out, (code, out, err)
+    assert "own-config: yes" in err, err
     assert cfg.read_text(encoding="utf-8") == text
 
 
@@ -297,6 +308,14 @@ def test_force_ocr(tool):
     assert grep(r.out, r"textlayer\.pdf:[0-9]+:Page 2:"), r.out
     assert grep(r.out, r"scan\.pdf:"), r.out
     assert os.path.isdir(os.path.join(tool.cache, cache_tag(force=True)))
+    # the page has a text layer: forced, its OCR text comes after the layer,
+    # so the needle is found twice there and once without the flag
+
+    def hits(out):
+        return len(re.findall(r"(?m)^.*textlayer\.pdf:[0-9]+:Page 2:", out))
+    plain = tool.run(NEEDLE, ".")
+    assert hits(plain.out) == 1, plain.out
+    assert hits(r.out) > hits(plain.out), r.out
 
 
 def test_lang(tool):

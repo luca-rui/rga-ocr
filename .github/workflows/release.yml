@@ -1,8 +1,11 @@
 name: release
 
-# A pushed v* tag publishes to PyPI. A manual run publishes the chosen ref
-# to TestPyPI and never touches PyPI. Both use trusted publishing (OIDC):
-# there is no API token in this repository.
+# A pushed v* tag publishes to PyPI and creates the GitHub release. A manual
+# run publishes the chosen ref to TestPyPI and never touches PyPI. Both use
+# trusted publishing (OIDC): there is no API token in this repository.
+#
+# PyPI ties the trusted publisher to this file's name and to the
+# environments pypi and testpypi: renaming either breaks the upload.
 on:
   push:
     tags: ["v*"]
@@ -15,6 +18,9 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # the tag check asks for the ci run of the commit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -24,19 +30,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: The tag is on main and matches the package version
+      - name: The tag matches the version and the changelog, is on main, and ci is green there
+        # tests/test_release_check.py covers the script; ci.yml runs its
+        # `consistency` part on every pull request. A run of ci that is
+        # still going is waited for (40 minutes). After a red or cancelled
+        # run: re-run its failed jobs, then re-run this workflow.
         if: github.event_name == 'push'
-        run: |
-          git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main" >&2
-            exit 1
-          fi
-          version=$(python -c "import re; print(re.search(r'^VERSION = \"([^\"]+)\"', open('src/rga_ocr/__init__.py').read(), re.M).group(1))")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match VERSION $version" >&2
-            exit 1
-          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/release_check.py tag "$GITHUB_REF_NAME"
 
       - name: Build
         run: |
@@ -67,6 +69,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
 
   pypi:
     name: publish to PyPI
@@ -83,3 +86,28 @@ jobs:
           path: dist/
 
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          # a re-run after a failure further down does not stop at the
+          # files that are already there
+          skip-existing: true
+
+  github-release:
+    name: GitHub release
+    if: github.event_name == 'push'
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create the release from the changelog section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists"
+            exit 0
+          fi
+          python3 tools/release_check.py notes > notes.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "rga-ocr ${GITHUB_REF_NAME#v}" --notes-file notes.md
