@@ -207,6 +207,7 @@ rga-ocr --version | -h | --help
   --no-exclude           skip nothing
   --names-only / --no-names
   --json                 rg JSON events; name hits first as {"type":"name","path":...}
+  --color WHEN           auto | always | never (default auto: colour on a terminal)
   --no-cache             do not read or write the OCR cache
   --progress / --no-progress   status line while searching and a summary after (default on)
   --init-config          write a commented profile and exit
@@ -217,16 +218,23 @@ rga-ocr --version | -h | --help
 ```
 
 Anything else is passed to `rga`/`rg`: `-g '!*.log'`, `-t pdf`, `-C 2`,
-`-U`, `-j 4`, `-M 300`, `--rga-config-file=...`. Value flags take
+`-U`, `-j 4`, `--rga-config-file=...`. Value flags take
 `--flag VALUE` or `--flag=VALUE`; in front of `setup` an `--rga-` flag
 needs the `=` form. `--rga-accurate` and `--rga-no-cache` mean `--accurate`
 and `--no-cache`, and `--rga-cache-path DIR` takes the place of `cache_dir`
-for that run. rg's output-format flags
+for that run. `--rga-adapters=LIST` replaces the adapters of the run,
+`--rga-adapters=+LIST` adds to them and `--rga-adapters=-LIST` takes some
+out (`--rga-adapters=-ocrimg` skips images). rg's output-format flags
 (`-l`, `-c`, `--count-matches`, `--files-without-match`, `--files`, `-q`)
 are refused with exit 2: the content pass reads rg's JSON events, which
-those flags replace. Use `--json` and filter the events instead.
+those flags replace. Use `--json` and filter the events instead. rg's
+formatting flags (`-o`, `--heading`, `--vimgrep`, `-M` ...) are accepted
+with a warning and change nothing, because the output format is
+`rga-ocr`'s own.
 
-Exit status: 0 at least one hit, 1 no hit, 2 failure.
+Exit status: 0 at least one hit, 1 no hit, 2 failure. A search without a
+content hit in which the OCR engine failed on a file ends with 2, not 1:
+those files were not read.
 
 Examples:
 
@@ -242,19 +250,26 @@ rga-ocr --json needle DIR | jq -r '.data.path.text // .path' | sort -u
 
 On a terminal, hits are grouped per file with the match highlighted, name
 hits first under `# names`. Piped, every hit is one line:
-`path:line:text`. PDF pages and slides carry a `Page N:` prefix, archive
+`path:line:text`, without colour unless `--color always` asks for it
+(`NO_COLOR` switches the colour off on a terminal). PDF pages and slides carry a `Page N:` prefix, archive
 members a `member.ext:` prefix.
 
 Content matches are shown as a **snippet window**: up to 80 characters on
 each side of the match, with the prefixes kept and `…` marking cut text.
 `--snippet N` changes the width, `--full` prints whole lines. `--json`
-always carries whole lines.
+always carries whole lines. A name hit whose file name is not valid UTF-8
+(Linux) has U+FFFD in `"path"` and the exact name, base64-encoded, in
+`"path_bytes"`.
+
+When the reader of the output goes away (`rga-ocr needle DIR | head -1`)
+or the search gets SIGTERM, SIGHUP or Ctrl-C, `rga`, `rg` and the adapters
+are stopped as well.
 
 While the content pass runs on a terminal, a **status line** on stderr
 shows that the search is alive:
 
 ```
-⠹ searching 12 s · 3 hits · 14 files OCR'd · Scans/IMG_4711.heic
+⠹ searching 12 s · 3 hits · 14 files read · Scans/IMG_4711.heic
 ```
 
 Hits keep appearing above it as they are found. The file count is the
@@ -264,7 +279,7 @@ cleared before every hit, and when the content pass ends it is replaced by
 a summary:
 
 ```
-searched 12.4 s · 3 hits · 14 files OCR'd
+searched 12.4 s · 3 hits · 14 files read
 ```
 
 Both go to stderr and are only shown when stdout and stderr are a
@@ -454,6 +469,9 @@ and under a second afterwards.
   affected cache after changing them.
 - The cache has no size limit and never expires entries; `--cache-info`
   shows what it holds, `--clear-cache` trims it.
+- Content hits of a long first search arrive in batches, not one by one:
+  rg hands its output to `rga-ocr` through a pipe and fills a buffer
+  first. `| head -1` therefore waits for the first batch.
 - A first argument of `setup` starts the subcommand; to search for the
   word itself write `rga-ocr -- setup PATH`.
 - `-r`, `-s`, `-i`, `--engine`, `--full` and `--json` belong to `rga-ocr`;

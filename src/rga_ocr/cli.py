@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,17 @@ NO_OCR_ADAPTERS = ["ocrpdf", "officexml"]
 # these flags replace or silence that stream, so they are refused up front
 NO_JSON_OPTS = {"-c", "--count", "--count-matches", "-l", "--files-with-matches", "--generate",
                 "--files-without-match", "--files", "-q", "--quiet", "--no-json"}
+# rg formatting options that change nothing here: rg's JSON events carry no
+# formatting, and the text output is rga-ocr's own. Accepted with a warning.
+NO_EFFECT_OPTS = {"-o", "--only-matching", "--vimgrep", "--column", "--heading", "--no-heading",
+                  "-N", "--no-line-number", "-p", "--pretty", "--trim", "-b", "--byte-offset",
+                  "-H", "--with-filename", "-I", "--no-filename", "--null", "-0", "--colors",
+                  "--context-separator", "--field-context-separator", "--field-match-separator",
+                  "--path-separator", "--hyperlink-format", "-M", "--max-columns",
+                  "--max-columns-preview"}
+COLOR_MODES = ("auto", "always", "ansi", "never")
+# flags of the setup command; before the word "setup" they make it a query
+SETUP_FLAGS = ("--apply", "--remove", "--engine", "--lang", "--config")
 # rga-ocr's own flags that take a value, as `--flag VALUE` or `--flag=VALUE`:
 # the profile setting each one overrides (None: --config, not a setting)
 VALUE_FLAGS = {"--snippet": "snippet", "--name-blank": "name_blank", "--engine": "engine",
@@ -109,7 +121,7 @@ snippet = 80
 # Extra ripgrep-all adapters appended to the list, e.g. mail,ffmpeg
 adapters_extra =
 
-# true: show a live status line (elapsed time, hits, files OCR'd, current
+# true: show a live status line (elapsed time, hits, files read, current
 # file) on stderr while the content pass runs, and a one-line summary after
 # it. Only when stdout and stderr are a terminal and --json is not given.
 # Flags --progress / --no-progress.
@@ -140,6 +152,7 @@ usage: {PROG} [options] QUERY [PATH]        PATH defaults to .
   --no-exclude           skip nothing
   --names-only / --no-names
   --json                 rg JSON events; name hits first as {{"type":"name","path":...}}
+  --color WHEN           auto | always | never (default auto: colour on a terminal)
   --no-cache             do not read or write the OCR cache
   --progress / --no-progress   status line while searching and a summary after (default on)
   --init-config          write a commented profile to {{config path}} and exit
@@ -150,14 +163,17 @@ usage: {PROG} [options] QUERY [PATH]        PATH defaults to .
   --version, -h, --help
 
 Value flags take --flag VALUE or --flag=VALUE; write short flags one by one (-i -r).
-Anything else is passed to rga/rg (-g, -t, -C, -U, -j, -M, -e, --rga-config-file ...),
-except rg's output-format flags (-l, -c, --files, -q ...), which are refused.
+Anything else is passed to rga/rg (-g, -t, -C, -U, -j, -e, --rga-config-file ...),
+except rg's output-format flags (-l, -c, --files, -q ...), which are refused; rg's
+formatting flags (-o, --heading, -M ...) are accepted and change nothing.
 --rga-accurate and --rga-no-cache mean --accurate and --no-cache;
 --rga-cache-path DIR takes the place of cache_dir for this run.
+--rga-adapters=LIST replaces the adapters of this run, +LIST adds to them, -LIST removes.
 --replace works together with --json only.
 
 profile: {{config path}}   keys: {", ".join(DEFAULTS)}
-exit status: 0 at least one hit, 1 no hit, 2 failure
+exit status: 0 at least one hit, 1 no hit, 2 failure (also: no hit while the
+OCR engine failed on a file)
 """
 
 
@@ -558,6 +574,7 @@ def parse_args(argv):
         "accurate": False, "no_exclude": False, "names": True, "contents": True, "json": False,
         "no_cache": False, "init": False, "clear_cache": False, "cache_info": False, "engines": False,
         "dry_run": False, "config": None, "query": None, "root": ".", "replace": False,
+        "color": "auto", "adapters": None,
     }
     args = list(argv)
     pos = []
@@ -623,6 +640,14 @@ def parse_args(argv):
             # the directory stands in for cache_dir, with a directory per
             # engine and language below it as usual
             o["flags"]["cache_dir"] = val if eq else take(name)
+        elif name == "--rga-adapters":
+            # set by the search as well: the caller's list is worked into it
+            o["adapters"] = val if eq else take(name)
+        elif name == "--color":
+            o["color"] = val if eq else take(name)
+            if o["color"] not in COLOR_MODES:
+                warn(f"--color: expected auto, always or never, got {o['color']!r}")
+                raise SystemExit(2)
         elif a == "--progress":
             o["flags"]["progress"] = "true"
         elif a == "--no-progress":
@@ -641,6 +666,8 @@ def parse_args(argv):
                 raise SystemExit(2)
             if name == "--replace":
                 o["replace"] = True
+            if name in NO_EFFECT_OPTS:
+                warn(f"{name} has no effect: the output format is rga-ocr's own (see --json, --snippet, --full)")
             if not a.startswith("--") and len(a) > 2:
                 check_cluster(a)
             if a.startswith("--rga-") and a in VALOPTS and args:
@@ -701,6 +728,20 @@ def walk_names(root, exclude, pattern):
         for n in dirnames + sorted(filenames):
             if pattern.search(n):
                 yield os.path.join(dirpath, n)
+
+
+def name_event(path):
+    """The --json line of a name hit. A name that is not valid UTF-8 (Linux)
+    is given with U+FFFD in "path" and exactly in "path_bytes" (base64), so
+    the line is valid JSON in any case."""
+    ev = {"type": "name", "path": path}
+    try:
+        path.encode("utf-8")
+    except UnicodeEncodeError:
+        raw = os.fsencode(path)
+        ev["path"] = raw.decode("utf-8", "replace")
+        ev["path_bytes"] = base64.b64encode(raw).decode("ascii")
+    return json.dumps(ev, separators=(",", ":"), ensure_ascii=False)
 
 
 # --------------------------------------------------------- content pass
@@ -816,7 +857,7 @@ class Status:
     FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     ASCII_FRAMES = "|/-\\"
 
-    def __init__(self, report, root, verb="OCR'd"):
+    def __init__(self, report, root, verb="read"):
         self.report = report
         self.root = root
         self.verb = verb            # what the adapters did to a finished file
@@ -895,9 +936,10 @@ class Status:
 
 
 class Printer:
-    def __init__(self, tty):
+    def __init__(self, tty, color="auto"):
         self.tty = tty
-        self.color = tty and not os.environ.get("NO_COLOR")
+        self.color = {"always": True, "ansi": True, "never": False}.get(
+            color, tty and not os.environ.get("NO_COLOR"))
         self.current = None
         self.status = None
 
@@ -955,6 +997,14 @@ def adapter_list(o, st):
     for a in as_list(st["adapters_extra"]):
         if a not in adapters:
             adapters.append(a)
+    spec = (o.get("adapters") or "").strip()
+    named = [n for n in spec.lstrip("+-").split(",") if n.strip()]
+    if spec.startswith("-"):
+        adapters = [a for a in adapters if a not in named]
+    elif spec.startswith("+"):
+        adapters += [n for n in named if n not in adapters]
+    elif named:
+        adapters = named
     return adapters
 
 
@@ -1039,6 +1089,69 @@ def forget_failed(con, failed, root):
         pass
 
 
+# rga starts rg, and rg starts an adapter per file: a group of their own,
+# so that all of them can be stopped together (POSIX; taskkill on Windows)
+OWN_GROUP = {"process_group": 0} if hasattr(os, "killpg") else {}
+
+
+def stop_tree(proc):
+    """Stop rga and everything it started, if rga still runs. After rga has
+    exited its process group is not touched: the id may belong to another
+    program by then."""
+    if proc.poll() is not None:
+        return
+    try:
+        if OWN_GROUP:
+            os.killpg(proc.pid, signal.SIGTERM)
+        elif sys.platform == "win32":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        else:
+            proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            if OWN_GROUP:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+            proc.wait(timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def watch_reader(proc, gone):
+    """Stop rga when the reader of our output goes away (`| head -1`).
+    Without this the search runs on until the next hit is printed into the
+    closed pipe, and with no further hit until every file is OCR'd. Only
+    for a pipe, and only where poll() exists."""
+    import select
+    import stat
+    try:
+        fd = sys.stdout.fileno()
+        if not hasattr(select, "poll") or not stat.S_ISFIFO(os.fstat(fd).st_mode):
+            return
+        poller = select.poll()
+        # an event a pipe never has: what arrives is the error (Linux) or
+        # hang-up (macOS) of a closed read end; asking for no event at all
+        # reports nothing on macOS
+        poller.register(fd, select.POLLPRI)
+    except (OSError, ValueError, AttributeError):
+        return
+
+    def loop():
+        while proc.poll() is None:
+            try:
+                if any(ev & (select.POLLERR | select.POLLHUP | select.POLLNVAL) for _fd, ev in poller.poll(200)):
+                    gone.set()
+                    stop_tree(proc)
+                    return
+            except OSError:
+                return
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 def run_contents(o, st, printer, root, query):
     rga = shutil.which("rga")
     if not rga:
@@ -1101,8 +1214,7 @@ def run_contents(o, st, printer, root, query):
 
         hits = False
         width = st["snippet_int"]
-        verb = "OCR'd" if o["ocr"] else "read"
-        live = Status(Report(report_path), root, verb) if status_line else None
+        live = Status(Report(report_path), root) if status_line else None
         printer.status = live
         errbuf = []
 
@@ -1113,7 +1225,7 @@ def run_contents(o, st, printer, root, query):
                 errbuf.append(raw)
 
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, **OWN_GROUP)
         except OSError as e:
             warn(f"cannot run rga: {e}")
             return False, 2
@@ -1121,6 +1233,8 @@ def run_contents(o, st, printer, root, query):
         reader.start()
         if live:
             live.start()
+        gone = threading.Event()
+        watch_reader(proc, gone)
         try:
             for raw in proc.stdout:
                 if o["json"]:
@@ -1145,10 +1259,15 @@ def run_contents(o, st, printer, root, query):
                     printer.match(path, d.get("line_number"), text, hl)
                 else:
                     printer.match(path, d.get("line_number"), rg_text(d.get("lines")).rstrip("\r\n"), [], sep="-")
+            if gone.is_set():
+                raise BrokenPipeError
             sys.stdout.flush()
             status = proc.wait()
             reader.join()
         finally:
+            # left early (the reader of the output went away, a signal, an
+            # error): rga, rg and the adapters must not go on with the OCR
+            stop_tree(proc)
             if live:
                 live.finish()
             printer.status = None
@@ -1169,6 +1288,13 @@ def run_contents(o, st, printer, root, query):
         forget_failed(held, failed, root)
         # rga reports its own failures (config, cache, adapter spawn) with exit 1, like "no match"
         if status == 1 and re.search(rb"(?im)^error", err):
+            status = 2
+        if status < 0:
+            warn(f"rga was stopped by signal {-status}; the search is incomplete")
+            status = 2
+        # files the engine failed on were not searched and will be read
+        # again: "no hit" would be wrong for this run
+        if failed and status in (0, 1):
             status = 2
         return hits, status
     finally:
@@ -1229,11 +1355,14 @@ def main(argv=None):
     st["progress_on"] = as_bool(st["progress"], "progress")
 
     root, query = o["root"], o["query"]
+    if query == "setup" and any(a.partition("=")[0] in SETUP_FLAGS for a in argv[:argv.index("setup")]):
+        warn('searching for the word "setup"; the setup command goes first: '
+             f"{PROG} setup [--apply] [--engine NAME] ...")
     if not os.path.exists(root):
         warn(f"no such path: {root}")
         return 2
     tty = sys.stdout.isatty() and not o["json"]
-    printer = Printer(tty)
+    printer = Printer(tty, "never" if o["json"] else o["color"])
     hits = False
 
     if o["names"]:
@@ -1245,7 +1374,7 @@ def main(argv=None):
             hits = True
             if o["json"]:
                 for p in found:
-                    print(json.dumps({"type": "name", "path": p}, separators=(",", ":"), ensure_ascii=False))
+                    print(name_event(p))
             else:
                 printer.heading("# names")
                 for p in found:
@@ -1253,6 +1382,9 @@ def main(argv=None):
                 if o["contents"]:
                     printer.heading("\n# contents")
 
+    # the content pass writes rg's bytes past this text layer: flush, or on
+    # a pipe the name hits come out after them
+    sys.stdout.flush()
     status = 1
     if o["contents"]:
         chits, status = run_contents(o, st, printer, root, query)
@@ -1262,8 +1394,42 @@ def main(argv=None):
     return 0 if hits else 1
 
 
+def prepare_streams():
+    """Output must not fail on a character the stream cannot encode. With
+    UTF-8, a file name that is not valid UTF-8 (Linux) goes out as the bytes
+    it has on disk; any other encoding gets a backslash escape. On Windows a
+    pipe or file gets UTF-8, which is what rg writes there and what --json
+    passes through; the console is left alone."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if sys.platform == "win32":
+                if not stream.isatty():
+                    stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+                else:
+                    stream.reconfigure(errors="backslashreplace")
+            elif (stream.encoding or "").lower().replace("-", "").replace("_", "") == "utf8":
+                stream.reconfigure(errors="surrogateescape")
+            else:
+                stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def _stopped(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
 def run():
-    """Console-script entry point: exit codes for a broken pipe and Ctrl-C."""
+    """Console-script entry point: exit codes for a broken pipe and Ctrl-C.
+    SIGTERM and SIGHUP end the run like Ctrl-C does, so rga is stopped and
+    the scratch directory removed."""
+    prepare_streams()
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            try:
+                signal.signal(getattr(signal, name), _stopped)
+            except (ValueError, OSError):
+                pass
     try:
         sys.exit(main())
     except BrokenPipeError:

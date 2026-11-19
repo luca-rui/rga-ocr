@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `--color auto|always|never`. `always` keeps the highlighting on a pipe
+  (`rga-ocr --color always needle . | less -R`).
+- `--rga-adapters=LIST`, `+LIST` and `-LIST` change the adapters of one
+  run. The flag was accepted before and had no effect, because the search
+  passes its own list after it.
+
+### Changed
+
+- Exit status 2 instead of 1 when a search finds nothing in the contents
+  and the OCR engine failed on a file. Exit 1 said "no hit" for files that
+  were not read. The same holds when `rga` is killed by a signal.
+- The status line and the summary say "files read", not "files OCR'd":
+  the count takes in PDFs with a text layer and Office files.
+- rg's formatting flags (`-o`, `--heading`, `--vimgrep`, `-M` ...) get a
+  warning that they change nothing.
+
+### Fixed
+
+- `--json` on a pipe: the name events came after rg's events. They come
+  first again, as documented.
+- `rga`, `rg` and the adapters went on with the OCR after the search was
+  stopped: by SIGTERM or SIGHUP, which also left the scratch directory
+  behind, or by the reader of a pipe going away (`| head -1`).
+- A file name the output encoding cannot show (a C locale, a redirect on
+  Windows, a name that is not UTF-8 on Linux) ended the search with a
+  traceback. Such names are printed as they are on disk or with a
+  backslash escape; `--json` adds `"path_bytes"` for a name that is not
+  UTF-8.
+- `rga-ocr --engine NAME setup` searched for the word "setup" silently. It
+  still does, and now says how to call the setup command.
+
 ## [0.2.4] - 2026-11-19
 
 ### Fixed

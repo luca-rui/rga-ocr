@@ -3,6 +3,7 @@ usage errors, the rga config pass-through to setup. No engine, no rga."""
 import json
 import os
 import re
+import sys
 
 import pytest
 
@@ -314,8 +315,8 @@ def test_rga_value_flags_reach_rga_in_the_equals_form():
     # rga 0.10.10 rejects "--rga-max-archive-recursion 2"
     o = cli.parse_args(["--rga-max-archive-recursion", "2", "q", "dir"])
     assert (o["query"], o["root"], o["pass"]) == ("q", "dir", ["--rga-max-archive-recursion=2"])
-    o = cli.parse_args(["--rga-adapters=+mail", "q"])
-    assert o["pass"] == ["--rga-adapters=+mail"]
+    o = cli.parse_args(["--rga-max-archive-size=2G", "q"])
+    assert o["pass"] == ["--rga-max-archive-size=2G"]
 
 
 @pytest.mark.parametrize("argv, word", [
@@ -451,3 +452,75 @@ def test_name_pattern_gives_up_on_a_regex_only_rg_can_read(capsys):
     assert cli.name_pattern(r"\p{Lu}est", True, "nonletter", False, True) is None
     assert "file names are not searched" in capsys.readouterr().err
     assert cli.name_pattern(r"\p{Lu}est", False, "nonletter", False, True).search("a \\p{Lu}est b")
+
+
+def test_rga_adapters_of_the_caller_are_worked_into_the_list():
+    # rga takes the last --rga-adapters only, and the search passes its own
+    st = {"adapters_extra": ""}
+    base = cli.adapter_list({"ocr": True, "mail": False}, st)
+    for argv in (["--rga-adapters=-ocrimg,zip", "q"], ["--rga-adapters", "-ocrimg,zip", "q"]):
+        o = cli.parse_args(argv)
+        assert o["pass"] == [], argv
+        assert cli.adapter_list(o, st) == [a for a in base if a not in ("ocrimg", "zip")]
+    o = cli.parse_args(["--rga-adapters=+ffmpeg,zip", "q"])
+    assert cli.adapter_list(o, st) == base + ["ffmpeg"]
+    o = cli.parse_args(["--rga-adapters=pandoc,ocrpdf", "q"])
+    assert cli.adapter_list(o, st) == ["pandoc", "ocrpdf"]
+
+
+def test_color_flag(capsys):
+    assert cli.parse_args(["q"])["color"] == "auto"
+    assert cli.parse_args(["--color", "always", "q", "dir"])["color"] == "always"
+    o = cli.parse_args(["--color=never", "q"])
+    assert (o["color"], o["query"], o["pass"]) == ("never", "q", [])
+    with pytest.raises(SystemExit):
+        cli.parse_args(["--color", "blue", "q"])
+    assert "--color: expected auto, always or never" in capsys.readouterr().err
+    assert cli.Printer(False, "always").color is True
+    assert cli.Printer(True, "never").color is False
+    assert cli.Printer(False).color is False
+
+
+@pytest.mark.parametrize("argv", [["-o"], ["--heading"], ["-M", "100"], ["--max-columns=100"], ["--vimgrep"]])
+def test_rg_formatting_flags_are_named_as_having_no_effect(argv, capsys):
+    o = cli.parse_args(argv + ["q", "dir"])
+    assert (o["query"], o["root"], o["pass"]) == ("q", "dir", argv)
+    assert argv[0].split("=")[0] + " has no effect" in capsys.readouterr().err
+    cli.parse_args(["-g", "*.pdf", "q"])
+    assert "no effect" not in capsys.readouterr().err
+
+
+def test_name_event_of_a_name_that_is_not_utf8():
+    assert json.loads(cli.name_event("a/ä.txt")) == {"type": "name", "path": "a/ä.txt"}
+    # what os.listdir gives on Linux for the bytes b"sch\xf6n.txt"
+    name = "sch\udcf6n.txt"
+    line = cli.name_event(name)
+    line.encode("utf-8")                     # no lone surrogate left
+    ev = json.loads(line)
+    # Windows encodes the lone surrogate as three bytes, each one replaced
+    assert ev["path"] == ("sch���n.txt" if sys.platform == "win32" else "sch�n.txt")
+    import base64
+    assert base64.b64decode(ev["path_bytes"]) == os.fsencode(name)
+
+
+def test_setup_after_its_flags_is_a_search_and_says_so(cli):
+    r = cli.run("--names-only", "--lang", "en-US", "setup", cwd=cli.root)
+    assert r.code == 1 and "Traceback" not in r.err, r.err
+    assert 'searching for the word "setup"; the setup command goes first' in r.err, r.err
+    r = cli.run("--names-only", "setup", cwd=cli.root)
+    assert r.err == "", r.err
+
+
+def test_output_a_stream_cannot_encode_is_escaped(cli, tmp_path):
+    """A file name with a character the output encoding lacks (a C locale,
+    a redirect on Windows) must not end the search with a traceback."""
+    import subprocess
+    (tmp_path / "Kessel-日本.txt").write_text("x\n")
+    env = cli.env_with({"PYTHONUTF8": "0", "PYTHONIOENCODING": "ascii"})
+    p = subprocess.run([sys.executable, "-m", "rga_ocr.cli", "--names-only", "Kessel", str(tmp_path)],
+                       env=env, capture_output=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    assert b"Traceback" not in p.stderr, p.stderr
+    # a pipe on Windows gets UTF-8 whatever the environment says
+    want = "Kessel-日本.txt".encode() if sys.platform == "win32" else b"Kessel-\\u65e5\\u672c.txt"
+    assert want in p.stdout, p.stdout

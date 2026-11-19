@@ -315,6 +315,9 @@ def test_json(tool):
     name = {"type": "name", "path": "." + os.sep + "Angebot_Wartungsvertrag_Kesselanlage_2026.bin"}
     assert name in events, lines
     assert any(e.get("type") == "match" for e in events)
+    # name hits first, also on a pipe, where Python buffers its own text
+    kinds = [e.get("type") == "name" for e in events]
+    assert kinds == sorted(kinds, reverse=True), [e.get("type") for e in events]
     assert grep(r.out, r'"text":"Lorem ipsum.*Mitte Wartungsvertrag Kesselanlage Ende'), r.out
     assert "…" not in r.out
 
@@ -332,8 +335,8 @@ def test_exclude(tool):
 
 # ------------------------------------------------------------- status line
 
-STATUS = r"searching [0-9]+ s · [0-9]+ hits? · [0-9]+ files? OCR'd"
-SUMMARY = r"^searched [0-9]+\.[0-9] s · [0-9]+ hits? · [0-9]+ files? OCR'd$"
+STATUS = r"searching [0-9]+ s · [0-9]+ hits? · [0-9]+ files? read"
+SUMMARY = r"^searched [0-9]+\.[0-9] s · [0-9]+ hits? · [0-9]+ files? read$"
 
 
 def strip_status(raw):
@@ -352,12 +355,13 @@ pty_only = pytest.mark.skipif(IS_WINDOWS, reason="pty-based check")
 
 
 @pty_only
-def test_status_line_of_a_no_ocr_run_does_not_claim_ocr(tool):
-    code, raw = tool.run_pty("--no-ocr", "--no-cache", NEEDLE, ".")
-    assert code == 0
-    out = render(raw)
-    assert grep(out, r"^searched [0-9]+\.[0-9] s · [0-9]+ hits? · [0-9]+ files? read$"), out
-    assert "OCR'd" not in raw.decode("utf-8", "replace")
+def test_status_line_does_not_claim_ocr(tool):
+    # the count takes in text files and PDFs with a text layer as well
+    for flags in (["--no-ocr"], []):
+        code, raw = tool.run_pty(*flags, "--no-cache", NEEDLE, ".")
+        assert code == 0
+        assert grep(render(raw), SUMMARY), render(raw)
+        assert "OCR'd" not in raw.decode("utf-8", "replace")
 
 
 @pty_only
@@ -366,7 +370,7 @@ def test_status_line(tool):
     assert code == 0
     out = raw.decode("utf-8", "replace").replace("\r", "")
     assert grep(out, STATUS), out
-    assert grep(out, r"OCR'd · [^ ]*(photo|shot|scan|rotated|IMG_0001|needle|textlayer|deck|tabelle)"), out
+    assert grep(out, r"read · [^ ]*(photo|shot|scan|rotated|IMG_0001|needle|textlayer|deck|tabelle)"), out
     out = strip_status(raw)
     assert grep(out, r"^1:Page 1: .*Wartungsvertrag Kesselanlage.*Seite eins$"), out
     assert grep(out, r"^# names$"), out
@@ -477,12 +481,15 @@ def test_engine_failure_is_not_cached(tool, tmp_path):
     member = "^" + re.escape(P) + r": adapter image failed on needle\.jpg: OSError: model fetch failed \(not cached"
     for run in range(2):                     # the second run does not answer from the cache
         r = t.search(env=env)
+        # not "no hit" (1): files went unread
+        assert r.code == 2, (r.code, r.err)
         assert not grep(r.out, r"photo\.png|needle\.jpg"), r.out
         assert grep(r.err, failed) and grep(r.err, member), r.err
         # a file that cannot be opened is reported once, then cached as empty
         assert bool(grep(r.err, unreadable)) == (run == 0), r.err
     os.remove(down)
     r = t.search(env=env)
+    assert r.code == 0, (r.code, r.err)
     assert grep(r.out, r"^(\.[/\\])?photo\.png:"), (r.out, r.err)
     assert grep(r.out, r"^(\.[/\\])?bundle\.zip:"), (r.out, r.err)
     assert not grep(r.err, "model fetch failed"), r.err
@@ -658,3 +665,129 @@ def test_misspelt_environment_variable_gets_one_warning(tool):
     assert len(r.err.strip().splitlines()) == 1, r.err
     r = tool.run("setup", "--help", env={"RGA_OCR_LANGUAGE": "de-DE"})
     assert r.err.count("RGA_OCR_LANGUAGE ignored: no such setting") == 1, r.err
+
+
+# ------------------------------------------------------------- output and stopping
+
+def test_color_always_on_a_pipe(tool):
+    r = tool.run("--no-names", NEEDLE, "notes.txt")
+    assert r.code == 0 and "\x1b[" not in r.out, r.out
+    # the suite sets NO_COLOR; an explicit flag wins over it
+    r = tool.run("--color", "always", "--no-names", NEEDLE, "notes.txt")
+    assert r.code == 0 and grep(r.out, "\x1b\\[[0-9;]*m" + NEEDLE.split()[0]), repr(r.out)
+    r = tool.run("--color=always", "--json", "--no-names", NEEDLE, "notes.txt")
+    assert "\x1b[" not in r.out, r.out
+
+
+def test_caller_can_take_an_adapter_out(tool):
+    r = tool.run("--no-names", "--rga-adapters=-" + NAMES["adapters"]["image"], NEEDLE, ".")
+    assert r.code == 0 and clean_err(r), r.err
+    assert grep(r.out, "^" + rel("notes.txt") + ":") and not grep(r.out, r"photo\.png"), r.out
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="file names are bytes on Linux only")
+def test_file_name_that_is_not_utf8(tool, tmp_path):
+    import base64
+    raw = os.fsencode(str(tmp_path)) + b"/Kesselanlage-sch\xf6n.txt"
+    with open(raw, "w") as f:
+        f.write("x\n")
+    p = subprocess.run(tool.argv(["--names-only", "Kesselanlage", str(tmp_path)]), env=tool.env,
+                       capture_output=True, timeout=60)
+    assert p.returncode == 0 and b"Traceback" not in p.stderr, p.stderr
+    assert b"Kesselanlage-sch\xf6n.txt" in p.stdout, p.stdout
+    p = subprocess.run(tool.argv(["--json", "--names-only", "Kesselanlage", str(tmp_path)]), env=tool.env,
+                       capture_output=True, timeout=60)
+    ev = json.loads(p.stdout.decode("utf-8"))
+    assert base64.b64decode(ev["path_bytes"]) == raw, ev
+
+
+posix_only = pytest.mark.skipif(IS_WINDOWS, reason="signals and process groups")
+
+
+def wait_for(cond, seconds, what):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        got = cond()
+        if got:
+            return got
+        time.sleep(0.1)
+    pytest.fail("timed out: " + what, pytrace=False)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class SlowSearch:
+    """A search whose adapter sleeps for a minute, started and left running:
+    what stops it early must also stop rga, rg and the adapter."""
+
+    def __init__(self, tool, tmp_path):
+        t = Tool(str(tmp_path / "slow"))
+        os.makedirs(t.fx)
+        shutil.copy(os.path.join(tool.fx, "photo.png"), t.fx)
+        cfg = spy_config()
+        for a in cfg["custom_adapters"]:
+            a["args"] = [os.path.join(HERE, "slow_adapter.py") if x.endswith("spy_adapter.py") else x
+                         for x in a["args"]]
+        with open(t.rga_config, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        self.pids = str(tmp_path / "pids")
+        self.scratch = str(tmp_path / "scratch")
+        os.makedirs(self.pids)
+        os.makedirs(self.scratch)
+        env = t.env_with({"ADAPTER_PIDS": self.pids, "TMPDIR": self.scratch})
+        self.proc = subprocess.Popen(t.argv(["--no-cache", NEEDLE, "."]), cwd=t.fx, env=env,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            self.adapter = int(wait_for(lambda: os.listdir(self.pids), 60, "the adapter did not start")[0])
+        except BaseException:
+            self.proc.kill()
+            raise
+
+    def ended(self):
+        """Exit status within 20 s (the adapter alone would take 60), with
+        the adapter gone and the scratch directory removed."""
+        try:
+            code = self.proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            pytest.fail("the search went on", pytrace=False)
+        wait_for(lambda: not alive(self.adapter), 10, "the adapter still runs")
+        assert os.listdir(self.scratch) == [], os.listdir(self.scratch)
+        return code
+
+
+@posix_only
+def test_sigterm_stops_the_whole_search(tool, tmp_path):
+    import signal
+    s = SlowSearch(tool, tmp_path)
+    s.proc.send_signal(signal.SIGTERM)
+    assert s.ended() == 128 + signal.SIGTERM
+
+
+@posix_only
+def test_search_stops_when_the_reader_of_its_output_leaves(tool, tmp_path):
+    # `rga-ocr ... | head -1`: without a further hit nothing is written, so
+    # no write fails; the closed pipe has to be noticed another way
+    s = SlowSearch(tool, tmp_path)
+    s.proc.stdout.close()
+    assert s.ended() == 0
+
+
+@posix_only
+def test_rga_killed_by_a_signal_is_not_a_no_hit(tool, tmp_path):
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    rga = fake / "rga"
+    rga.write_text("#!/bin/sh\nkill -KILL $$\n")
+    rga.chmod(0o755)
+    r = tool.run("--no-names", NEEDLE, ".", env={"PATH": str(fake) + os.pathsep + os.environ["PATH"]})
+    assert r.code == 2, (r.code, r.err)
+    assert grep(r.err, "^" + re.escape(P) + ": rga was stopped by signal 9; the search is incomplete$"), r.err
