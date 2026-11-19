@@ -29,7 +29,7 @@ class VisionEngine(Engine):
         if macos_version() < (13, 0):
             return False, "needs macOS 13 or newer"
         if not cls.installed():
-            return False, "pip install 'rga-ocr[vision]'"
+            return False, cls.install_hint()
         return True, ""
 
     def __init__(self, langs):

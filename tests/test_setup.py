@@ -451,6 +451,104 @@ def test_fetch_reports_failure_and_removes_the_part_file(monkeypatch, tmp_path):
     assert out.todos == [f'curl -sSL -o "{dest}" https://example.invalid/eng.traineddata']
 
 
+def test_git_blob_id_is_the_id_git_gives(tmp_path):
+    empty, hello = tmp_path / "empty", tmp_path / "hello"
+    empty.write_bytes(b"")
+    hello.write_bytes(b"hello\n")
+    assert sc.git_blob_id(str(empty)) == "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"     # git hash-object
+    assert sc.git_blob_id(str(hello)) == "ce013625030ba8dba906f756967f9e9ca394464a"
+
+
+def test_fetch_installs_only_the_expected_file(monkeypatch, tmp_path):
+    import io
+    import urllib.request
+    body = {}
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: io.BytesIO(body["data"]))
+    dest = str(tmp_path / "eng.traineddata")
+    expect = (6, "ce013625030ba8dba906f756967f9e9ca394464a")            # b"hello\n"
+
+    for data, why in ((b"hel", "got 3 of 6 bytes"), (b"hallo\n", "the content is not the file")):
+        body["data"] = data
+        out = sc.Out()
+        assert sc.fetch("https://example.invalid/eng.traineddata", dest, out, expect=expect) is False
+        assert not os.path.exists(dest) and not os.path.exists(dest + ".part")
+        assert any(l.startswith("fetch failed: " + why) for l in out.lines), out.lines
+
+    body["data"] = b"hello\n"
+    assert sc.fetch("https://example.invalid/eng.traineddata", dest, sc.Out(), expect=expect) is True
+    with open(dest, "rb") as f:
+        assert f.read() == b"hello\n"
+
+
+def test_language_files_are_fetched_from_a_fixed_commit_and_checked(monkeypatch, tmp_path):
+    from rga_ocr import engines, paths
+    from rga_ocr.engines import tesseract as t
+    assert re.search(r"/raw/[0-9a-f]{40}/$", t.DOWNLOAD_BASE), t.DOWNLOAD_BASE
+    assert all(size > 0 and re.fullmatch(r"[0-9a-f]{40}", blob) for size, blob in t.FILES.values())
+    tess = engines.load("tesseract")
+    monkeypatch.setattr(tess, "installed", classmethod(lambda c: True))
+    monkeypatch.setattr(t, "find_tessdata", lambda codes: None)
+    monkeypatch.setattr(paths, "tessdata_dir", lambda: str(tmp_path))
+    seen = []
+    monkeypatch.setattr(sc, "fetch", lambda url, dest, out, expect=None: seen.append((url, expect)) or True)
+    sc.check_engine(sc.Out(), "tesseract", ["de"], apply=True)
+    assert seen == [(t.DOWNLOAD_BASE + "deu.traineddata", t.FILES["deu"])], seen
+
+
+def test_missing_engine_names_the_install_command_of_this_environment(monkeypatch):
+    from rga_ocr import engines
+    rapid = engines.load("rapidocr")
+    monkeypatch.setattr(rapid, "installed", classmethod(lambda c: False))
+    monkeypatch.setattr(sc, "under_homebrew", lambda: False)
+    monkeypatch.setattr(sc, "under_pipx", lambda: True)
+    assert rapid.available([]) == (False, 'not installed: pipx install --force "rga-ocr[rapidocr]"')
+    # Homebrew: the formula has no extras, a pip command would lead nowhere
+    monkeypatch.setattr(sc, "under_pipx", lambda: False)
+    monkeypatch.setattr(sc, "under_homebrew", lambda: True)
+    ok, reason = rapid.available([])
+    assert not ok and "rga-ocr setup --engine rapidocr" in reason and "pip install" not in reason
+
+
+def test_missing_language_files_hint_names_engine_and_languages(monkeypatch, tmp_path):
+    from rga_ocr import engines
+    from rga_ocr.engines import tesseract as t
+    tess = engines.load("tesseract")
+    monkeypatch.setattr(tess, "installed", classmethod(lambda c: True))
+    monkeypatch.setattr(t, "find_tessdata", lambda codes: None)
+    ok, reason = tess.available(["de-DE", "fr"])
+    assert not ok and "rga-ocr setup --apply --engine tesseract --lang de-DE,fr fetches" in reason
+    ok, reason = tess.available([])
+    assert "rga-ocr setup --apply --engine tesseract fetches" in reason
+
+
+# ------------------------------------------------------- adapter command
+
+def test_adapter_flags_follow_the_place_of_the_install(monkeypatch, tmp_path):
+    import site
+    user = tmp_path / "user" / "site-packages"
+    (user / "rga_ocr").mkdir(parents=True)
+    monkeypatch.setattr(site, "getusersitepackages", lambda: str(user))
+    assert sc.in_user_site(str(user / "rga_ocr")) is True
+    assert sc.in_user_site(str(tmp_path / "venv" / "site-packages" / "rga_ocr")) is False
+    assert sc.in_user_site() is False and sc.adapter_args()[0] == "-I"
+    monkeypatch.setattr(sc, "in_user_site", lambda: True)
+    # -I would hide the user site-packages and with it this package
+    assert sc.adapter_args() == ["-P", "-X", "utf8", "-m", "rga_ocr.adapter"]
+    assert sc.adapter_entries()[0]["args"][:4] == ["-P", "-X", "utf8", "-m"]
+
+
+def test_setup_starts_the_adapter(monkeypatch):
+    out = sc.Out()
+    assert sc.adapter_starts(out) is True and out.lines == ["the adapter starts"]
+    monkeypatch.setattr(sc, "adapter_args", lambda: ["-I", "-m", "rga_ocr_not_there.adapter"])
+    out = sc.Out()
+    assert sc.adapter_starts(out) is False
+    assert "the adapter does not start" in out.lines[0] and "rga_ocr_not_there" in out.lines[0], out.lines
+    # and verify stops there
+    out = sc.Out()
+    assert sc.verify(out, apply=True) is False and len(out.lines) == 1
+
+
 # -------------------------------------------------------- config write
 
 CFG_WITH_COMMENT = """\
@@ -563,6 +661,7 @@ def test_verify_runs_rga_only_with_apply(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout=fake_run.stdout, stderr="")
 
     monkeypatch.setattr(sc.subprocess, "run", fake_run)
+    monkeypatch.setattr(sc, "adapter_starts", lambda out: True)
 
     # no rga: nothing to verify with
     monkeypatch.setattr(sc.shutil, "which", lambda name: None)

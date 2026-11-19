@@ -62,7 +62,7 @@ class RapidOCREngine(Engine):
     @classmethod
     def available(cls, langs):
         if not cls.installed():
-            return False, "pip install 'rga-ocr[rapidocr]'"
+            return False, cls.install_hint()
         try:
             model_for(langs)
         except ValueError as e:

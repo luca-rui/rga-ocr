@@ -26,6 +26,10 @@ RGA_RELEASES = "https://github.com/phiresky/ripgrep-all/releases/download"
 
 ADAPTER_MODULE = "rga_ocr.adapter"
 ADAPTER_ARGS = ["-I", "-X", "utf8", "-m", ADAPTER_MODULE]
+# -I leaves the user site-packages out, so a `pip install --user` copy of
+# this package would not be found. There only -P is kept: the directory a
+# search runs in stays off the module path.
+ADAPTER_ARGS_USER_SITE = ["-P", "-X", "utf8", "-m", ADAPTER_MODULE]
 ADAPTER_NAMES = ("ocrpdf", "ocrimg", "officexml")
 
 IMAGE_EXT = ["jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "webp", "gif", "bmp"]
@@ -270,6 +274,15 @@ def extra_install_command(extra):
     return f'{python_command()} -m pip install "{spec}"'
 
 
+def engine_install_hint(cls):
+    """Why an engine whose packages are missing is unavailable, and what
+    installs them here."""
+    if under_homebrew():
+        return (f"not part of the Homebrew formula, which carries vision only; "
+                f"{PROG} setup --engine {cls.name} shows the install that has it")
+    return "not installed: " + extra_install_command(cls.extra)
+
+
 def todo_extra(out, extra, note=""):
     """The TODO line that installs an engine's extra."""
     if under_homebrew():
@@ -342,7 +355,7 @@ def _engine_fixes(out, cls, langs, apply):
             url = t.DOWNLOAD_BASE + code + ".traineddata"
             dest = os.path.join(target, code + ".traineddata")
             if apply:
-                fetched = fetch(url, dest, out) and fetched
+                fetched = fetch(url, dest, out, expect=t.FILES.get(code)) and fetched
             else:
                 out.todo(f"fetch {url} -> {dest}")
         return fetched and cls.available(langs)[0]
@@ -367,9 +380,21 @@ def _engine_fixes(out, cls, langs, apply):
     return cls.available(langs)[0]
 
 
-def fetch(url, dest, out, timeout=60):
-    """Download url to dest through a .part file. A network or HTTP failure
-    is reported with the command to retry by hand; returns whether it worked."""
+def git_blob_id(path):
+    """The id git gives a file's content: SHA-1 over a header and the bytes."""
+    import hashlib
+    h = hashlib.sha1(b"blob %d\0" % os.path.getsize(path), usedforsecurity=False)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fetch(url, dest, out, timeout=60, expect=None):
+    """Download url to dest through a .part file. expect is (size, git blob
+    id): a download that was cut short or holds other content is not
+    installed. A failure is reported with the command to retry by hand;
+    returns whether it worked."""
     import shutil as _shutil
     import urllib.error
     import urllib.request
@@ -379,6 +404,13 @@ def fetch(url, dest, out, timeout=60):
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r, open(tmp, "wb") as f:
             _shutil.copyfileobj(r, f)
+        if expect:
+            size, blob = expect
+            got = os.path.getsize(tmp)
+            if got != size:
+                raise OSError(f"got {got} of {size} bytes")
+            if git_blob_id(tmp) != blob:
+                raise OSError("the content is not the file that is expected")
         os.replace(tmp, dest)
     except (urllib.error.URLError, OSError) as e:
         try:
@@ -431,10 +463,29 @@ def load_jsonc(text):
     return json.loads(stripped) if stripped.strip() else {}
 
 
+def in_user_site(package_dir=None):
+    """True when this package is installed in the user site-packages."""
+    import site
+    here = package_dir or os.path.dirname(os.path.abspath(__file__))
+    try:
+        user = site.getusersitepackages()
+        if not user:
+            return False
+        here, user = (os.path.normcase(os.path.realpath(p)) for p in (here, user))
+        return os.path.commonpath([here, user]) == user
+    except (AttributeError, OSError, ValueError):   # ValueError: other drive
+        return False
+
+
+def adapter_args():
+    """The interpreter flags and module rga starts the adapters with."""
+    return list(ADAPTER_ARGS_USER_SITE if in_user_site() else ADAPTER_ARGS)
+
+
 def adapter_entries(binary=None, args=None):
     """The three custom adapter entries, pointing at this interpreter."""
     binary = binary or adapter_python()
-    args = list(ADAPTER_ARGS if args is None else args)
+    args = adapter_args() if args is None else list(args)
 
     def entry(name, mode, desc, ext, mime, hint, version=1):
         return {"name": name, "description": f"{PROG}: {desc}", "version": version,
@@ -499,7 +550,7 @@ def check_rga_config(out, apply, rga_config=None):
     before = [a.get("name") for a in existing.get("custom_adapters") or []]
     out.line(f"adapters now: {', '.join(before) or '(none)'}")
     out.line(f"adapters after: {', '.join(a['name'] for a in merged['custom_adapters'])}")
-    out.line(f"adapter command: {adapter_python()} {' '.join(ADAPTER_ARGS)} <mode> <file>")
+    out.line(f"adapter command: {adapter_python()} {' '.join(adapter_args())} <mode> <file>")
     unchanged = existing.get("custom_adapters") == merged["custom_adapters"]
     if unchanged:
         out.line("up to date")
@@ -606,8 +657,29 @@ def leftovers(out, profile, cache_dir, config_flag=None):
     out.line(f"the package: {uninstall_command()}")
 
 
+def adapter_starts(out):
+    """Start the adapter the way rga does and see that it finds the package.
+    rga shows nothing of an adapter that fails to start: such an install
+    would look like searches that find no text."""
+    cmd = [adapter_python()] + adapter_args() + ["--check"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        out.line(f"the adapter does not start: {e}")
+        return False
+    if p.returncode != 0 or p.stdout.strip() != "ok":
+        last = (p.stderr.strip().splitlines() or ["no output"])[-1]
+        out.line(f"the adapter does not start ({' '.join(cmd)}): {last}")
+        return False
+    out.line("the adapter starts")
+    return True
+
+
 def verify(out, apply, rga_config=None):
     out.section("verify")
+    if not adapter_starts(out):
+        return False
     if not shutil.which("rga"):
         out.line("rga not on PATH; skipped")
         return False

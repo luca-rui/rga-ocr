@@ -56,8 +56,10 @@ rga-ocr "maintenance contract" ~/Documents
 `tesseract` engine needs `rga-ocr setup --apply` once, for its language
 files.
 
-pi-heif ships no wheels for Python 3.15 yet. Where `python3` is 3.15, add
-`--python python3.14` (any of 3.11 to 3.14) to the `pipx install` line.
+HEIC and HEIF images need pi-heif, which ships no wheels for Python 3.15
+yet. The install works there, without HEIC. Where `python3` is 3.15 and
+HEIC matters, add `--python python3.14` (any of 3.11 to 3.14) to the
+`pipx install` line.
 
 ## Platforms and engines
 
@@ -72,7 +74,7 @@ pi-heif ships no wheels for Python 3.15 yet. Where `python3` is 3.15, add
 | `vision` | Apple Vision through PyObjC | `rga-ocr[vision]` | auto-detected; `lang` pins a list of BCP 47 tags |
 | `winocr` | Windows.Media.Ocr through PyWinRT | `rga-ocr[winocr]` and an OCR language pack (`Add-WindowsCapability -Online -Name "Language.OCR~~~de-DE~0.0.1.0"`, as administrator) | one language per run: the first of `lang` with a pack installed, else the user's profile languages |
 | `rapidocr` | PaddleOCR models on ONNX Runtime, pure pip | `rga-ocr[rapidocr]` | the bundled multilingual model covers Latin script, Chinese and Japanese with nothing to download; `lang` with a Cyrillic, Arabic, Devanagari, Korean, Thai, Greek, Tamil, Telugu or Georgian tag switches to that script's model (fetched on first use); one script per run |
-| `tesseract` | Tesseract 5 through tesserocr wheels | `rga-ocr[tesseract]` and the `.traineddata` files for `lang` (`rga-ocr setup --apply` fetches them from tessdata_fast) | any combination with language files, default `eng` |
+| `tesseract` | Tesseract 5 through tesserocr wheels | `rga-ocr[tesseract]` and the `.traineddata` files for `lang` (`rga-ocr setup --apply` fetches them from tessdata_fast and checks them) | BCP 47 tags for 59 languages (`de-DE`, `fr`), or the name of any tessdata_fast file (`frk`, `chi_sim_vert`); several at once; default `eng` |
 
 `rga-ocr --engines` shows which engines work on this machine, why one
 does not, and which `auto` picks. `--engine NAME`, the profile key
@@ -105,9 +107,9 @@ Vision engine only. For another engine use the PyPI install below instead.
    | Windows | `scoop install rga` (pulls ripgrep, pandoc, poppler, ffmpeg) or `choco install ripgrep-all ripgrep pandoc` |
 
 2. Install `rga-ocr` with the engine extra you want, with
-   [pipx](https://pipx.pypa.io) or in a venv. Python 3.11 to 3.14 (pi-heif
-   ships no wheels for 3.15 yet; `pipx install --python python3.14 ...`
-   picks an interpreter).
+   [pipx](https://pipx.pypa.io) or in a venv. Python 3.11 or newer; HEIC
+   needs 3.11 to 3.14 (pi-heif ships no wheels for 3.15 yet;
+   `pipx install --python python3.14 ...` picks an interpreter).
 
    ```
    pipx install "rga-ocr[rapidocr]"
@@ -486,8 +488,10 @@ and under a second afterwards.
   `--files-without-match`, `--files`, `-q`) are refused with exit 2; use
   `--json` and filter the events.
 - Python 3.15, and Windows on arm64: pi-heif ships no wheel there yet, so
-  `pip install` tries to build it and fails without a C toolchain and
-  libheif. Use Python 3.11 to 3.14.
+  it is not installed and HEIC and HEIF images are not read. A search
+  names each such file with the reason, exits 2 when nothing else matched
+  and reads the file again once pi-heif is there. Use Python 3.11 to 3.14
+  for HEIC.
 - ripgrep-all 0.10.10 opens its SQLite cache once per file, without a
   busy timeout, creates the schema when the database is new and rebuilds
   the WAL index when it is the first to open the file. With many files

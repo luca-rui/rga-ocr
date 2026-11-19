@@ -13,8 +13,20 @@ All notable changes to this project are documented here. The format follows
 - `--rga-adapters=LIST`, `+LIST` and `-LIST` change the adapters of one
   run. The flag was accepted before and had no effect, because the search
   passes its own list after it.
+- The `tesseract` engine takes the name of a tessdata_fast file as `lang`
+  (`frk`, `chi_sim_vert`), next to the BCP 47 tags.
+- `rga-ocr setup` starts the adapter once, the way rga does. An install
+  the adapter cannot be loaded from shows there, not as searches that
+  find nothing.
 
 ### Changed
+
+- Tesseract language files come from one fixed commit of tessdata_fast,
+  and `setup --apply` checks size and content of each download. A file
+  that was cut short is no longer installed.
+- pi-heif is not installed on Python 3.15 and on Windows on arm64, where
+  it has no wheels. The install no longer fails there; HEIC and HEIF
+  images are reported as not read, and read once pi-heif is present.
 
 - Exit status 2 instead of 1 when a search finds nothing in the contents
   and the OCR engine failed on a file. Exit 1 said "no hit" for files that
@@ -36,6 +48,15 @@ All notable changes to this project are documented here. The format follows
   traceback. Such names are printed as they are on disk or with a
   backslash escape; `--json` adds `"path_bytes"` for a name that is not
   UTF-8.
+- A copy installed with `pip install --user` found no text in any file:
+  the adapter ran with `-I`, which leaves the user site-packages out.
+- "Engine not available" named `pip install 'rga-ocr[NAME]'` under pipx,
+  uv and Homebrew, where that command does not reach the install. It
+  names the command for the install at hand. The hint for missing
+  Tesseract language files carries `--engine` and `--lang`, without
+  which `setup --apply` fetched the files of the profile.
+- `lang = tl` (Tagalog) with the `tesseract` engine asked for a language
+  file that does not exist. It takes `fil.traineddata`.
 - `rga-ocr --engine NAME setup` searched for the word "setup" silently. It
   still does, and now says how to call the setup command.
 
