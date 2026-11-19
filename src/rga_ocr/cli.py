@@ -129,7 +129,7 @@ progress = true
 """
 
 USAGE = f"""\
-usage: {PROG} [options] QUERY [PATH]        PATH defaults to .
+usage: {PROG} [options] QUERY [PATH ...]    PATH defaults to .
        {PROG} [--rga-config-file=F] setup [--apply] [--engine NAME] [--lang L] [--config PATH]
        {PROG} [--rga-config-file=F] setup --remove [--config PATH]
 
@@ -594,7 +594,7 @@ def parse_args(argv):
         "flags": {}, "pass": [], "regex": False, "ocr": True, "force": False, "mail": False,
         "accurate": False, "no_exclude": False, "names": True, "contents": True, "json": False,
         "no_cache": False, "init": False, "clear_cache": False, "cache_info": False, "engines": False,
-        "dry_run": False, "config": None, "query": None, "root": ".", "replace": False,
+        "dry_run": False, "config": None, "query": None, "root": ".", "roots": ["."], "replace": False,
         "color": "auto", "adapters": None,
     }
     args = list(argv)
@@ -713,10 +713,8 @@ def parse_args(argv):
         raise SystemExit(2)
     o["query"] = pos[0]
     if len(pos) > 1:
+        o["roots"] = pos[1:]
         o["root"] = pos[1]
-    if len(pos) > 2:
-        warn(f"too many arguments: {' '.join(pos[2:])}")
-        raise SystemExit(2)
     return o
 
 
@@ -837,18 +835,30 @@ class Report:
         return out
 
 
+def as_roots(root):
+    """The search roots as a list: one PATH or several."""
+    return [root] if isinstance(root, (str, bytes)) else list(root)
+
+
 def display_path(path, root):
     """rga reports absolute virtual paths with a '/./' from the search root;
     show them the way the hits are shown, relative to the root. rga echoes
     the root as given (or canonical, for a relative one), so compare the
-    normalised path against both spellings of the root."""
+    normalised path against both spellings of the root. With several roots
+    the relative path alone would not say where the file is: the root goes
+    in front the way it was given."""
+    roots = as_roots(root)
     if os.path.isabs(path):
         path = os.path.normpath(path)
-    for base in (os.path.abspath(root), os.path.realpath(root)):
-        prefix = base.rstrip(os.sep) + os.sep
-        if path.startswith(prefix):
-            path = path[len(prefix):]
-            break
+    # the longest root first: of dir and dir/sub the nearer one names the file
+    for given in sorted(roots, key=lambda r: -len(os.path.abspath(r))):
+        for base in (os.path.abspath(given), os.path.realpath(given)):
+            prefix = base.rstrip(os.sep) + os.sep
+            if path.startswith(prefix):
+                path = path[len(prefix):]
+                while path[:2] in ("./", "." + os.sep):
+                    path = path[2:]
+                return path if len(roots) == 1 else os.path.join(given, path)
     while path[:2] in ("./", "." + os.sep):
         path = path[2:]
     return path
@@ -1098,7 +1108,7 @@ def forget_failed(con, failed, root):
             if os.path.isabs(path):
                 con.execute("delete from preproc_cache where file_path = ?", (os.path.normpath(path),))
                 continue
-            for base in {os.path.abspath(root), os.path.realpath(root)}:
+            for base in {f(r) for r in as_roots(root) for f in (os.path.abspath, os.path.realpath)}:
                 prefix = base.rstrip(os.sep) + os.sep
                 con.execute(
                     "delete from preproc_cache where adapter in (%s)"
@@ -1210,7 +1220,7 @@ def run_contents(o, st, printer, root, query):
         own_config = run_config(o["pass"], run_dir)
         if own_config:
             cmd.append("--rga-config-file=" + own_config)
-        cmd += o["pass"] + ["-e", query, "--", root]
+        cmd += o["pass"] + ["-e", query, "--", *as_roots(root)]
 
         env = dict(os.environ)
         env.pop(ENV_PREFIX + "LANG", None)
@@ -1374,12 +1384,16 @@ def main(argv=None):
     optional = as_bool(st["name_blank_optional"], "name_blank_optional")
     st["progress_on"] = as_bool(st["progress"], "progress")
 
-    root, query = o["root"], o["query"]
+    roots, query = o["roots"], o["query"]
+    root = roots[0] if len(roots) == 1 else roots
     if query == "setup" and any(a.partition("=")[0] in SETUP_FLAGS for a in argv[:argv.index("setup")]):
         warn('searching for the word "setup"; the setup command goes first: '
              f"{PROG} setup [--apply] [--engine NAME] ...")
-    if not os.path.exists(root):
-        warn(f"no such path: {root}")
+    absent = [r for r in roots if not os.path.exists(r)]
+    if absent:
+        warn(f"no such path: {', '.join(absent)}"
+             + ("; everything after QUERY is a PATH, so a query of several words needs quotes"
+                if len(roots) > 1 else ""))
         return 2
     tty = sys.stdout.isatty() and not o["json"]
     printer = Printer(tty, "never" if o["json"] else o["color"])
@@ -1389,7 +1403,7 @@ def main(argv=None):
         pat = name_pattern(query, o["regex"], st["name_blank"], optional, st["case"] == "insensitive")
         if pat is None and not o["contents"]:
             return 2
-        found = list(walk_names(root, set(st["exclude_list"]), pat)) if pat else []
+        found = [p for r in roots for p in walk_names(r, set(st["exclude_list"]), pat)] if pat else []
         if found:
             hits = True
             if o["json"]:

@@ -229,7 +229,7 @@ Tesseract language files, for you to run. Run the cache command
 ## Usage
 
 ```
-rga-ocr [options] QUERY [PATH]        PATH defaults to .
+rga-ocr [options] QUERY [PATH ...]    PATH defaults to .
 rga-ocr [--rga-config-file=F] setup [--apply] [--engine NAME] [--lang L] [--config PATH]
 rga-ocr [--rga-config-file=F] setup --remove [--config PATH]
 rga-ocr --version | -h | --help

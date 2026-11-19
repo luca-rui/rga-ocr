@@ -810,3 +810,19 @@ def test_rga_killed_by_a_signal_is_not_a_no_hit(tool, tmp_path):
     r = tool.run("--no-names", NEEDLE, ".", env={"PATH": str(fake) + os.pathsep + os.environ["PATH"]})
     assert r.code == 2, (r.code, r.err)
     assert grep(r.err, "^" + re.escape(P) + ": rga was stopped by signal 9; the search is incomplete$"), r.err
+
+
+def test_several_paths(tool):
+    """Every argument after QUERY is searched, names and contents, and each
+    hit shows the path it was found under."""
+    r = tool.run(NEEDLE, "sub", "photo.png", os.path.join("formats", "photo.bmp"))
+    assert r.code == 0, r.err
+    assert grep(r.out, r"^sub[/\\]scan\.pdf:"), r.out
+    assert grep(r.out, r"^photo\.png:"), r.out
+    assert grep(r.out, r"^formats[/\\]photo\.bmp:"), r.out
+    assert not grep(r.out, r"textlayer\.pdf"), r.out           # not under any of the three
+    one = tool.run(NEEDLE, "sub")
+    assert set(one.out.splitlines()) < set(r.out.splitlines())
+    # a query of two words without quotes: the second word is taken as a path
+    r = tool.run("Wartungsvertrag", "Kesselanlage", ".")
+    assert r.code == 2 and "no such path: Kesselanlage; everything after QUERY is a PATH" in r.err
