@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-19
+
 ### Fixed
 
 - `--rga-cache-path`, `--rga-accurate` (next to `--accurate`) and
@@ -276,7 +278,8 @@ First public release.
   per engine with `RGA_OCR_ENGINE`; GitHub Actions matrix across macOS,
   Ubuntu and Windows.
 
-[Unreleased]: https://github.com/luca-rui/rga-ocr/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/luca-rui/rga-ocr/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/luca-rui/rga-ocr/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/luca-rui/rga-ocr/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/luca-rui/rga-ocr/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/luca-rui/rga-ocr/compare/v0.2.0...v0.2.1
