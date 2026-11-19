@@ -398,3 +398,63 @@ def test_office_cells_of_a_row_stay_apart():
            '<table:table-cell><text:p>34</text:p></table:table-cell>'
            '</table:table-row></table:table></office:document-content>')
     assert office({"content.xml": ods}).split() == ["12", "34"]
+
+
+# --------------------------------------------------------------- limits
+
+def tiff(frames):
+    import io
+    from PIL import Image
+    imgs = [Image.new("RGB", (40, 30), (255, 255, 255)) for _ in range(frames)]
+    buf = io.BytesIO()
+    imgs[0].save(buf, "TIFF", save_all=True, append_images=imgs[1:])
+    return buf.getvalue()
+
+
+def test_frames_come_one_at_a_time():
+    it = adapter.frames(tiff(4))
+    assert iter(it) is it                        # a generator, not a list of every frame
+    assert next(it).size == (40, 30)
+    assert len(list(it)) == 3
+    assert len(adapter.decode(tiff(4))) == 4
+
+
+def test_image_with_more_frames_than_the_limit_is_read_up_to_it(monkeypatch):
+    monkeypatch.setattr(FakeOCR, "text_of_bytes", adapter.OCR.text_of_bytes, raising=False)
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(FakeOCR, "bad", ())
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(adapter, "MAX_FRAMES", 3)
+    assert adapter.mode_image(tiff(5)) == "scan 1\n\nscan 2\n\nscan 3"
+    assert adapter.NOTES == ["more than 3 frames, the rest was not read (RGA_OCR_MAX_FRAMES raises the limit)"]
+    # at the limit nothing is left out and nothing is reported
+    monkeypatch.setattr(adapter, "NOTES", [])
+    assert adapter.mode_image(tiff(3)).count("scan") == 3
+    assert adapter.NOTES == []
+
+
+def test_office_text_beyond_the_limit_is_left_out_and_reported(monkeypatch):
+    def slide(word, n):
+        return "<p:sld>" + f"<a:p><a:r><a:t>{word}</a:t></a:r></a:p>" * n + "</p:sld>"
+    deck = {"ppt/slides/slide1.xml": slide("eins", 20000),      # about 700 kB
+            "ppt/slides/slide2.xml": slide("zwei", 20000),
+            "ppt/slides/slide3.xml": slide("drei", 10)}
+    monkeypatch.setattr(adapter, "NOTES", [])
+    whole = office(deck)
+    assert adapter.NOTES == [] and whole.count("zwei") == 20000 and whole.count("drei") == 10
+    monkeypatch.setattr(adapter, "MAX_OFFICE_MB", 1)
+    cut = office(deck)
+    assert cut.count("eins") == 20000                 # what was read is kept
+    assert 0 < cut.count("zwei") < 20000 and "drei" not in cut
+    assert len(adapter.NOTES) == 1, adapter.NOTES     # once, not once per member
+    assert adapter.NOTES[0].startswith("more than 1 MB of text, read up to there, the rest from ppt/slides/slide2.xml on")
+    # the same text packed small: the bytes read count, not the size of the file
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("content.xml", "<office:document-content><text:p>" + "A" * (3 << 20) + "</text:p></office:document-content>")
+    assert len(buf.getvalue()) < 10000
+    monkeypatch.setattr(adapter, "NOTES", [])
+    assert len(adapter.mode_office(buf.getvalue())) <= 1 << 20
+    assert len(adapter.NOTES) == 1

@@ -527,6 +527,19 @@ def backup_path(cfg_path):
     return path
 
 
+def shape_problem(cfg):
+    """What keeps a parsed rga config from being merged with or searched
+    for adapter entries, or None. One rule for setup, setup --remove and
+    the search: rga refuses these files as well."""
+    if not isinstance(cfg, dict):
+        return "not a JSON object"
+    adapters = cfg.get("custom_adapters")
+    if adapters is not None and not (
+            isinstance(adapters, list) and all(isinstance(a, dict) for a in adapters)):
+        return "custom_adapters is not a list of objects"
+    return None
+
+
 def check_rga_config(out, apply, rga_config=None):
     out.section("ripgrep-all config")
     cfg_path = rga_config or paths.rga_config_path()
@@ -545,6 +558,10 @@ def check_rga_config(out, apply, rga_config=None):
         if os.path.exists(cfg_path):
             with open(cfg_path, encoding="utf-8") as f:
                 existing = load_jsonc(f.read())
+    problem = shape_problem(existing)
+    if problem:
+        out.line(f"{cfg_path} is not shaped like an rga config ({problem}); fix or remove it first")
+        return False
     entries = adapter_entries()
     merged = merge_config(existing, entries)
     before = [a.get("name") for a in existing.get("custom_adapters") or []]
@@ -606,10 +623,9 @@ def remove_from_rga_config(out, rga_config=None):
     except (OSError, ValueError) as e:
         out.line(f"cannot parse {cfg_path}: {e}; {by_hand}")
         return False
-    adapters = existing.get("custom_adapters") if isinstance(existing, dict) else None
-    if not isinstance(existing, dict) or not (adapters is None or (
-            isinstance(adapters, list) and all(isinstance(a, dict) for a in adapters))):
-        out.line(f"{cfg_path} is not shaped like an rga config; {by_hand}")
+    problem = shape_problem(existing)
+    if problem:
+        out.line(f"{cfg_path} is not shaped like an rga config ({problem}); {by_hand}")
         return False
     cfg, gone = remove_adapters(existing)
     if not gone:

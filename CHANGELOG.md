@@ -31,7 +31,14 @@ All notable changes to this project are documented here. The format follows
 - pi-heif is not installed on Python 3.15 and on Windows on arm64, where
   it has no wheels. The install no longer fails there; HEIC and HEIF
   images are reported as not read, and read once pi-heif is present.
-
+- The cache directories are created for the user only (mode 0700) on
+  macOS and Linux. A directory that exists keeps its mode.
+- A multi-frame image is read one frame at a time and up to 500 frames
+  (`RGA_OCR_MAX_FRAMES`); an Office file up to 256 MB of unpacked text
+  (`RGA_OCR_MAX_OFFICE_MB`). A file beyond a limit is reported as partly
+  read and keeps the text read so far. Before, a small archive that
+  unpacks to gigabytes or a TIFF of thousands of pages was held in
+  memory as a whole.
 - Exit status 2 instead of 1 when a search finds nothing in the contents
   and the OCR engine failed on a file. Exit 1 said "no hit" for files that
   were not read. The same holds when `rga` is killed by a signal.
@@ -42,6 +49,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `rga-ocr setup` ended in a traceback on an rga config that is not a
+  JSON object or whose `custom_adapters` is not a list of objects, and
+  `setup --apply` wrote over `"custom_adapters": {}`. Both leave the file
+  alone and say what is wrong with it.
 - `--json` on a pipe: the name events came after rg's events. They come
   first again, as documented.
 - `rga`, `rg` and the adapters went on with the OCR after the search was

@@ -233,7 +233,8 @@ def settings_from(profile_path):
 # and what the CLI hands to the adapter or the adapter reads on its own.
 # tests/test_cli.py checks this list against the source.
 INTERNAL_ENV = ("CONFIG", "FORCE_OCR", "NO_OCR", "REPORT",
-                "MIN_TEXT_CHARS", "RENDER_DPI", "MAX_PIXELS", "PARAGRAPH_GAP")
+                "MIN_TEXT_CHARS", "RENDER_DPI", "MAX_PIXELS", "PARAGRAPH_GAP",
+                "MAX_FRAMES", "MAX_OFFICE_MB")
 
 
 def unknown_env(environ=None):
@@ -360,6 +361,26 @@ create unique index if not exists preproc_cache_idx
 """
 
 
+def private_makedirs(d):
+    """Create d and every missing directory above it for this user only
+    (0700). The cache holds the text of the documents searched. A directory
+    that exists keeps its mode: it may be shared on purpose. Windows takes
+    no mode; a new directory there inherits the access list of its parent."""
+    missing = []
+    d = os.path.abspath(d)
+    while not os.path.isdir(d):
+        missing.append(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    for p in reversed(missing):
+        try:
+            os.mkdir(p, 0o700)
+        except FileExistsError:         # another search made it meanwhile
+            pass
+
+
 def prepare_cache(d):
     """Create rga's cache database in d if it does not exist, and return an
     open connection to it (None if this SQLite cannot run rga's statements
@@ -375,7 +396,7 @@ def prepare_cache(d):
     owns it (forget_failed deletes rows after the run, nothing else). The
     caller closes the connection after the run."""
     import sqlite3
-    os.makedirs(d, exist_ok=True)
+    private_makedirs(d)
     db = os.path.join(d, "cache.sqlite3")
     fresh = not os.path.exists(db)
     try:
@@ -1031,13 +1052,12 @@ def run_config(passed, run_dir):
         pass
     except (OSError, ValueError) as e:
         return _config_unread(e)
-    if not isinstance(existing, dict):
-        return _config_unread("not a JSON object")
+    problem = setup_cmd.shape_problem(existing)
+    if problem:
+        return _config_unread(problem)
     entries = setup_cmd.adapter_entries()
     names = {e["name"] for e in entries}
     custom = existing.get("custom_adapters") or []
-    if not isinstance(custom, list) or not all(isinstance(a, dict) for a in custom):
-        return _config_unread("custom_adapters is not a list of objects")
     if [a for a in custom if a.get("name") in names] == entries:
         return None
     path = os.path.join(run_dir, "rga-config.jsonc")
