@@ -152,6 +152,8 @@ usage: {PROG} [options] QUERY [PATH]        PATH defaults to .
 Value flags take --flag VALUE or --flag=VALUE; write short flags one by one (-i -r).
 Anything else is passed to rga/rg (-g, -t, -C, -U, -j, -M, -e, --rga-config-file ...),
 except rg's output-format flags (-l, -c, --files, -q ...), which are refused.
+--rga-accurate and --rga-no-cache mean --accurate and --no-cache;
+--rga-cache-path DIR takes the place of cache_dir for this run.
 --replace works together with --json only.
 
 profile: {{config path}}   keys: {", ".join(DEFAULTS)}
@@ -605,7 +607,7 @@ def parse_args(argv):
             o["force"] = True
         elif a == "--mail":
             o["mail"] = True
-        elif a == "--accurate":
+        elif a in ("--accurate", "--rga-accurate"):
             o["accurate"] = True
         elif a == "--names-only":
             o["contents"] = False
@@ -613,8 +615,14 @@ def parse_args(argv):
             o["names"] = False
         elif a == "--json":
             o["json"] = True
-        elif a == "--no-cache":
+        elif a in ("--no-cache", "--rga-no-cache"):
+            # rga's own flag makes every custom adapter fail (rga 0.10.10)
             o["no_cache"] = True
+        elif name == "--rga-cache-path":
+            # the search sets this flag itself, and rga takes it only once:
+            # the directory stands in for cache_dir, with a directory per
+            # engine and language below it as usual
+            o["flags"]["cache_dir"] = val if eq else take(name)
         elif a == "--progress":
             o["flags"]["progress"] = "true"
         elif a == "--no-progress":
@@ -677,8 +685,10 @@ def name_pattern(query, regex, mode, optional, insensitive):
     try:
         return re.compile(pat, re.IGNORECASE if insensitive else 0)
     except re.error as e:
-        warn(f"bad regex for the name pass: {e}")
-        raise SystemExit(2)
+        # rg reads more regex syntax than Python (\p{Lu}, say): the pattern
+        # may be fine for the contents
+        warn(f"file names are not searched: Python cannot read this regex ({e})")
+        return None
 
 
 def walk_names(root, exclude, pattern):
@@ -1228,7 +1238,9 @@ def main(argv=None):
 
     if o["names"]:
         pat = name_pattern(query, o["regex"], st["name_blank"], optional, st["case"] == "insensitive")
-        found = list(walk_names(root, set(st["exclude_list"]), pat))
+        if pat is None and not o["contents"]:
+            return 2
+        found = list(walk_names(root, set(st["exclude_list"]), pat)) if pat else []
         if found:
             hits = True
             if o["json"]:

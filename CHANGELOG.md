@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `--rga-cache-path`, `--rga-accurate` (next to `--accurate`) and
+  `--rga-no-cache` ended in an rga error, because the search sets these
+  flags itself. `--rga-accurate` and `--rga-no-cache` now mean `--accurate`
+  and `--no-cache`. `--rga-cache-path DIR` takes the place of `cache_dir`
+  for that run, with a directory per engine and language below it.
+- `-r` with a regex that ripgrep reads and Python does not (`\p{Lu}`)
+  stopped the search. The contents are searched now; a warning says that
+  file names are not. With `--names-only` it is still an error.
+
 ## [0.2.3] - 2026-11-19
 
 ### Fixed

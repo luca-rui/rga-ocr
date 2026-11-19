@@ -218,7 +218,7 @@ def test_replace_passes_through_with_json_only():
     (["--replace=X", "q", "."], "--replace needs --json"),
     (["--count=x", "q", "."], "--count is not supported"),
     (["a", "b", "c"], "too many arguments: c"),
-    (["-r", "(", "."], "bad regex for the name pass"),
+    (["-r", "--names-only", "(", "."], "file names are not searched: Python cannot read this regex"),
     (["-l", "x", "."], "-l is not supported: the content pass reads rg's JSON output"),
     (["--files", "."], "--files is not supported"),
 ])
@@ -311,9 +311,9 @@ def test_prepare_cache_unsupported_sqlite(tmp_path, monkeypatch):
 
 
 def test_rga_value_flags_reach_rga_in_the_equals_form():
-    # rga 0.10.10 rejects "--rga-cache-path DIR"
-    o = cli.parse_args(["--rga-cache-path", "DIR", "q", "dir"])
-    assert (o["query"], o["root"], o["pass"]) == ("q", "dir", ["--rga-cache-path=DIR"])
+    # rga 0.10.10 rejects "--rga-max-archive-recursion 2"
+    o = cli.parse_args(["--rga-max-archive-recursion", "2", "q", "dir"])
+    assert (o["query"], o["root"], o["pass"]) == ("q", "dir", ["--rga-max-archive-recursion=2"])
     o = cli.parse_args(["--rga-adapters=+mail", "q"])
     assert o["pass"] == ["--rga-adapters=+mail"]
 
@@ -433,3 +433,21 @@ def test_engines_exit_code_says_whether_the_configured_engine_works(monkeypatch,
     assert ("configured:" in out) == (line is not None), out
     if line:
         assert line in out, out
+
+
+def test_rga_flags_the_search_sets_itself_are_not_passed_twice():
+    # rga takes --rga-cache-path and --rga-accurate only once, and its
+    # --rga-no-cache makes every custom adapter fail
+    for argv in (["--rga-cache-path", "DIR"], ["--rga-cache-path=DIR"]):
+        o = cli.parse_args(argv + ["q", "dir"])
+        assert (o["query"], o["root"], o["pass"], o["flags"]) == ("q", "dir", [], {"cache_dir": "DIR"})
+    o = cli.parse_args(["--accurate", "--rga-accurate", "--rga-no-cache", "q"])
+    assert (o["accurate"], o["no_cache"], o["pass"]) == (True, True, [])
+    with pytest.raises(SystemExit):
+        cli.parse_args(["q", "--rga-cache-path"])
+
+
+def test_name_pattern_gives_up_on_a_regex_only_rg_can_read(capsys):
+    assert cli.name_pattern(r"\p{Lu}est", True, "nonletter", False, True) is None
+    assert "file names are not searched" in capsys.readouterr().err
+    assert cli.name_pattern(r"\p{Lu}est", False, "nonletter", False, True).search("a \\p{Lu}est b")

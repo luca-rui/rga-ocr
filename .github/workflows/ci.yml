@@ -26,12 +26,11 @@ env:
 
 jobs:
   test:
-    # Required checks in the ruleset of main, by these exact names: the
-    # first seven entries of the matrix (macos-15 / vision, macos-15 /
-    # tesseract, ubuntu-latest / rapidocr, ubuntu-latest / tesseract,
-    # ubuntu-latest / auto, windows-latest / rapidocr, windows-latest /
-    # winocr) and the build job (build / sdist and wheel). Never rename
-    # them. A leg added later carries a label or a new os/engine pair.
+    # The ruleset of main requires the jobs of this workflow by their exact
+    # names (macos-15 / vision, ubuntu-latest / tesseract / python 3.11,
+    # build / sdist and wheel, lint / ruff ...). A renamed or removed job
+    # blocks every merge until the ruleset is changed with it; a leg added
+    # later carries a label or a new os/engine pair and is added there too.
     name: ${{ matrix.label || format('{0} / {1}', matrix.os, matrix.engine) }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -248,6 +247,7 @@ jobs:
 
       - name: Every dependency, extras included, is permissively licensed
         run: |
+          set -o pipefail    # a failure left of a pipe fails the step
           python -m venv /tmp/extras
           /tmp/extras/bin/pip install -q "$(ls dist/*.whl)[rapidocr,tesseract]"
           python -m pip install -q pip-licenses
