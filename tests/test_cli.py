@@ -3,6 +3,7 @@ usage errors, the rga config pass-through to setup. No engine, no rga."""
 import json
 import os
 import re
+import sys
 
 import pytest
 
@@ -496,7 +497,8 @@ def test_name_event_of_a_name_that_is_not_utf8():
     line = cli.name_event(name)
     line.encode("utf-8")                     # no lone surrogate left
     ev = json.loads(line)
-    assert ev["path"] == "sch�n.txt"
+    # Windows encodes the lone surrogate as three bytes, each one replaced
+    assert ev["path"] == ("sch���n.txt" if sys.platform == "win32" else "sch�n.txt")
     import base64
     assert base64.b64decode(ev["path_bytes"]) == os.fsencode(name)
 
@@ -513,11 +515,12 @@ def test_output_a_stream_cannot_encode_is_escaped(cli, tmp_path):
     """A file name with a character the output encoding lacks (a C locale,
     a redirect on Windows) must not end the search with a traceback."""
     import subprocess
-    import sys
     (tmp_path / "Kessel-日本.txt").write_text("x\n")
     env = cli.env_with({"PYTHONUTF8": "0", "PYTHONIOENCODING": "ascii"})
     p = subprocess.run([sys.executable, "-m", "rga_ocr.cli", "--names-only", "Kessel", str(tmp_path)],
                        env=env, capture_output=True, timeout=60)
     assert p.returncode == 0, p.stderr
     assert b"Traceback" not in p.stderr, p.stderr
-    assert b"Kessel-\\u65e5\\u672c.txt" in p.stdout, p.stdout
+    # a pipe on Windows gets UTF-8 whatever the environment says
+    want = "Kessel-日本.txt".encode() if sys.platform == "win32" else b"Kessel-\\u65e5\\u672c.txt"
+    assert want in p.stdout, p.stdout
