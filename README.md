@@ -219,7 +219,9 @@ rga-ocr --version | -h | --help
 Anything else is passed to `rga`/`rg`: `-g '!*.log'`, `-t pdf`, `-C 2`,
 `-U`, `-j 4`, `-M 300`, `--rga-config-file=...`. Value flags take
 `--flag VALUE` or `--flag=VALUE`; in front of `setup` an `--rga-` flag
-needs the `=` form. rg's output-format flags
+needs the `=` form. `--rga-accurate` and `--rga-no-cache` mean `--accurate`
+and `--no-cache`, and `--rga-cache-path DIR` takes the place of `cache_dir`
+for that run. rg's output-format flags
 (`-l`, `-c`, `--count-matches`, `--files-without-match`, `--files`, `-q`)
 are refused with exit 2: the content pass reads rg's JSON events, which
 those flags replace. Use `--json` and filter the events instead.

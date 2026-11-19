@@ -83,10 +83,10 @@ would, without a pinned sum.
 `lint / ruff` runs `ruff check .` with the rules named in
 `pyproject.toml`. Locally: `pipx run ruff==0.17.5 check .`
 
-The job names of the seven legs named first and of the build job are
-required checks on `main`. Do
-not rename them: a pull request whose check has another name waits for
-the old one forever.
+The job names of all legs, of the build job and of `lint / ruff` are
+required checks on `main`. Do not rename them without changing the
+ruleset: a pull request whose check has another name waits for the old
+one forever.
 
 ## Releases
 

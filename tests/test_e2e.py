@@ -432,6 +432,27 @@ def test_adapter_error_forwarded(tool):
     assert grep(r.out, r"a\.txt:1:needle here"), r.out
 
 
+def test_rga_flags_the_search_sets_itself(tool, tmp_path):
+    """rga takes --rga-cache-path and --rga-accurate only once and its
+    --rga-no-cache breaks custom adapters; the search sets all three."""
+    own = str(tmp_path / "own-cache")
+    for flags in (["--rga-cache-path", own], ["--rga-cache-path=" + own, "--accurate", "--rga-accurate"],
+                  ["--rga-no-cache"]):
+        r = tool.search(*flags)
+        assert r.code == 0 and grep(r.out, r"photo\.png"), (flags, r.out, r.err)
+        assert not grep(r.err, "provided more than once|preprocessor command failed"), (flags, r.err)
+    # a directory per engine and language, as below cache_dir
+    assert [d for d in os.listdir(own) if os.path.isfile(os.path.join(own, d, "cache.sqlite3"))], os.listdir(own)
+
+
+def test_regex_only_rg_can_read_still_searches_the_contents(tool):
+    r = tool.run("-r", r"\p{Lu}artungsvertrag", tool.fx)
+    assert r.code == 0 and grep(r.out, r"photo\.png"), (r.out, r.err)
+    assert grep(r.err, "^" + re.escape(P) + ": file names are not searched: "), r.err
+    r = tool.run("-r", "--names-only", r"\p{Lu}", tool.fx)
+    assert r.code == 2 and r.out == "", (r.out, r.err)
+
+
 def test_engine_failure_is_not_cached(tool, tmp_path):
     """While the OCR engine fails (a model download without network), files
     produce no text. That must not stay in the cache: once the engine works,
