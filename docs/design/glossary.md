@@ -14,8 +14,8 @@ that adapter's entries in the *cache*.
 
 ## cache
 
-ripgrep-all's cache of adapter output, keyed by path, size, mtime and the
-adapter `version`. rga-ocr keeps one cache directory per *cache tag* under
+ripgrep-all's cache of adapter output, keyed by path, mtime, the adapter with its
+`version`, and the adapter list of the run. rga-ocr keeps one cache directory per *cache tag* under
 `cache_dir` (`--cache-info` lists them, `--clear-cache` removes them).
 
 ## cache tag

@@ -21,6 +21,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The README has a contents list, a table of the file types that are
+  searched, a troubleshooting section and a privacy section that says what
+  the cache keeps. The design notes, the test description and the
+  repository layout moved to `CONTRIBUTING.md`.
 - Tesseract language files come from one fixed commit of tessdata_fast,
   and `setup --apply` checks size and content of each download. A file
   that was cut short is no longer installed.

@@ -2,9 +2,8 @@
 
 ## Supported versions
 
-| version | supported |
-|---------|-----------|
-| 0.1.x   | yes       |
+The latest release on PyPI gets fixes. A fix comes as a new version;
+older versions are not patched.
 
 ## Reporting a vulnerability
 

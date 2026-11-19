@@ -33,6 +33,49 @@ The tesseract leg fetches the `eng` and `deu` language files into its temp
 root when it finds none; the rapidocr leg downloads nothing for the default
 model. Apple Vision needs a GUI session.
 
+## What the tests cover
+
+`tests/make_fixtures.py` builds the fixtures (text, hidden file, text-layer
+PDF, scanned PDF, jpg/png/heic, EXIF-rotated jpg, docx/xlsx/pptx, zip with
+an image, long lines for the snippet window, decoys, excluded `.git`);
+`tests/test_e2e.py` runs `rga-ocr` against them as a subprocess with its
+own rga config, cache and profile, and asserts the shape of every hit, the
+exit codes, the profile precedence, the status line (through
+`tests/ptyrun.py`, POSIX only), adapter error forwarding and the warm-run
+timing. `tests/test_adapter.py`, `tests/test_cli.py` and
+`tests/test_setup.py` are unit tests for the paragraph grouping, image
+decoding, language mappings, cache clearing, argument errors and the rga
+config merge; they run without the toolchain. The end-to-end tests need
+`rga`, `rg`, `pandoc` on PATH; Vision
+needs a GUI session; the tesseract leg fetches `eng` and `deu` into its
+temp root when no tessdata is present. The CI section below names the legs.
+
+## Layout
+
+```
+pyproject.toml              package rga-ocr, engine extras, console script
+src/rga_ocr/cli.py          the CLI: profile, name pass, rga run, rendering, cache tools
+src/rga_ocr/adapter.py      pdf | image | office; decoding and paragraph grouping
+src/rga_ocr/engines/        registry (__init__), vision, winocr, rapidocr, tesseract
+src/rga_ocr/paths.py        profile, cache, data and rga config locations per platform
+src/rga_ocr/setup_cmd.py    `rga-ocr setup`: checks, install commands, rga config merge
+tests/conftest.py           fixture tree, rga config, cache and profile in a temp root
+tests/test_e2e.py           the CLI as a subprocess against the fixtures
+tests/test_adapter.py       unit tests: decoding, grouping, language mappings
+tests/test_cli.py           unit tests: cache clearing, adapter list, usage errors
+tests/test_setup.py         unit tests: JSONC parsing, config merge, install commands
+tests/make_fixtures.py      builds the fixture tree (PDFs written by hand, images drawn with Pillow)
+tests/data/shot.heic        HEIC sample for platforms without an encoder
+tests/ptyrun.py             runs a command on a pseudo-terminal for the tty tests
+tools/check_licences.py     CI check: no GPL/AGPL dependency, every licence on the allow-list
+docs/design/glossary.md     the terms used in the code and in the README
+tools/check_tools.py        CI check: the tools are on PATH and rga's pandoc adapter extracts text
+tools/release_check.py      CI and release check: version, changelog, tag, green ci run on main
+tools/fetch_verified.py     CI: download a file and check its SHA-256
+tools/min_constraints.py    CI: the constraints file for the minimum-versions leg
+tests/test_release_check.py unit tests for tools/release_check.py
+```
+
 ## Fixtures
 
 `tests/make_fixtures.py` builds the fixture tree at test time (text files,
@@ -131,6 +174,36 @@ asks for the whole CI run, so a leg that is not a required check on
 `tests/test_release_check.py` covers the script. The workflow itself runs
 only on a tag or by hand: repeat the dry run after any change to
 `release.yml`, including a Dependabot update of the actions it uses.
+
+## Design notes
+
+Decisions worth knowing before changing things:
+
+- Searches are case-insensitive by default; `-s` flips it. A blank in a
+  query matches a run of non-letter characters in names, so one query
+  finds `Maintenance_Contract` and `maintenance contract`.
+- The name pass is a Python walk, not `find` or `fd`, so hidden files,
+  the `exclude` list and the blank modes behave the same on every platform.
+- Content hits show a snippet window instead of whole lines because OCR
+  output lines can be a page long.
+- Profile precedence is built-in default, then the profile, then
+  `RGA_OCR_<KEY>`, then the flag; the adapters read only the environment
+  that `rga-ocr` hands them, never the profile.
+- One cache per engine and language setting, because the same scan yields
+  different text per engine; the adapter `version` invalidates entries
+  when the output format changes.
+- `--no-cache` uses a throwaway cache directory per run, because
+  ripgrep-all 0.10.10's `--rga-no-cache` makes every custom adapter fail.
+- `rga-ocr` creates ripgrep-all's cache database (same schema, version and
+  application id as 0.10.10) before each run and holds it open until
+  ripgrep-all exits, so the parallel `rga-preproc` processes neither create
+  the schema nor rebuild the WAL index at the same time (see Limits in the README).
+- The adapters run as `python -I -X utf8 -m rga_ocr.adapter MODE` with the
+  interpreter `rga-ocr` was installed with, so there is one place that
+  knows which engine packages exist and no launcher script to keep in sync.
+  An adapter ends with `os._exit(0)` after flushing its output: rg aborts
+  the whole search when a preprocessor exits non-zero, and the OCR
+  libraries' native teardown at interpreter exit must not decide that.
 
 ## Style
 
