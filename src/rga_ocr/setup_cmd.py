@@ -497,8 +497,8 @@ def adapter_entries(binary=None, args=None):
         entry("ocrpdf", "pdf", "PDF text layer via pypdfium2, OCR for pages without one",
               ["pdf"], ["application/pdf"], ".txt.asciipagebreaks", version=3),
         entry("ocrimg", "image", "OCR for photos and scans", IMAGE_EXT, IMAGE_MIME, ".txt", version=3),
-        entry("officexml", "office", "xlsx, pptx, ods, odp text (docx and odt go to pandoc)",
-              OFFICE_EXT, OFFICE_MIME, ".txt.asciipagebreaks", version=2),
+        entry("officexml", "office", "xlsx, pptx, ods, odp text and the pictures on slides (docx and odt go to pandoc)",
+              OFFICE_EXT, OFFICE_MIME, ".txt.asciipagebreaks", version=3),
     ]
 
 

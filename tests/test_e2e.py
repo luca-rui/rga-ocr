@@ -51,6 +51,10 @@ def test_cold_run(tool):
     assert grep(out, "^" + rel("tabelle.ods") + r":[0-9]+:Page 1:.*Wartungsvertrag Kesselanlage West"), out
     assert grep(out, "^" + rel("deck.odp") + r":[0-9]+:Page 2:.*Wartungsvertrag Kesselanlage"), out
     assert not grep(out, "^" + rel("deck.odp") + r":[0-9]+:Page 1:"), out
+    # the picture on a slide is read with its slide; the empty odp slide
+    # before it keeps its page number
+    assert grep(out, "^" + rel("deck.pptx") + r":[0-9]+:Page 1:.*Wartungsvertrag Kesselanlage"), out
+    assert grep(out, "^" + rel("deck.odp") + r":[0-9]+:Page 4:.*Wartungsvertrag Kesselanlage"), out
     for ext in ("tif", "tiff", "webp", "gif", "bmp"):
         if os.path.isfile(os.path.join(tool.fx, "formats", "photo." + ext)):
             assert grep(out, "^" + rel("formats", "photo." + ext) + ":"), out
@@ -296,6 +300,10 @@ def test_no_ocr(tool):
     assert grep(r.out, r"textlayer\.pdf:[0-9]+:Page 2:.*Wartungsvertrag Kesselanlage"), r.out
     assert "scan.pdf" not in r.out, r.out
     assert "photo.jpg" not in r.out, r.out
+    # the text of the slides, not the pictures on them
+    assert grep(r.out, r"deck\.pptx:[0-9]+:Page 2:"), r.out
+    assert not grep(r.out, r"deck\.pptx:[0-9]+:Page 1:"), r.out
+    assert not grep(r.out, r"deck\.odp:[0-9]+:Page 4:"), r.out
     assert os.path.isdir(os.path.join(tool.cache, "none"))
     # --no-ocr wins over --force-ocr; --no-cache, so the adapter runs again
     r = tool.run("--no-ocr", "--force-ocr", "--no-cache", NEEDLE, ".")

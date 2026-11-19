@@ -144,7 +144,7 @@ usage: {PROG} [options] QUERY [PATH ...]    PATH defaults to .
                          (exit code 1 when the configured engine, or with auto every
                          engine, does not work here)
   --lang L               OCR languages, e.g. de-DE,en-US or "de-DE en-US" (default: the engine decides)
-  --no-ocr               PDF text layer only, images skipped
+  --no-ocr               PDF text layer only; images and pictures on slides skipped
   --force-ocr            OCR every PDF page even if it has a text layer
   --mail                 also search .eml/.mbox
   --accurate             sniff mime types instead of trusting extensions
@@ -235,7 +235,7 @@ def settings_from(profile_path):
 # tests/test_cli.py checks this list against the source.
 INTERNAL_ENV = ("CONFIG", "FORCE_OCR", "NO_OCR", "REPORT",
                 "MIN_TEXT_CHARS", "RENDER_DPI", "MAX_PIXELS", "PARAGRAPH_GAP",
-                "MAX_FRAMES", "MAX_OFFICE_MB")
+                "MAX_FRAMES", "MAX_OFFICE_MB", "MAX_PICTURES")
 
 
 def unknown_env(environ=None):

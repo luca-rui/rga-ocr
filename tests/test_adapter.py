@@ -361,14 +361,18 @@ def test_decode_puts_transparent_images_on_white(mode):
 
 # --------------------------------------------------------------- office
 
-def office(members):
+def office_file(members):
     import io
     import zipfile
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         for name, body in members.items():
             z.writestr(name, body)
-    return adapter.mode_office(buf.getvalue())
+    return buf.getvalue()
+
+
+def office(members):
+    return adapter.mode_office(office_file(members))
 
 
 def test_office_runs_of_one_word_stay_one_word():
@@ -384,6 +388,117 @@ def test_office_runs_of_one_word_stay_one_word():
            '<text:s/>und<text:tab/>Wartung<text:line-break/>neu</text:p></draw:page>'
            '</office:document-content>')
     assert office({"content.xml": odp}) == "Kesselanlage und Wartung neu"
+
+
+class PictureOCR:
+    """Stands in for adapter.OCR on the pictures of a slide deck: the text
+    of a picture is its bytes; fails on the pictures named in bad."""
+    bad = ()
+    made = 0
+    seen = []
+
+    def __init__(self):
+        PictureOCR.made += 1
+
+    def text_of_bytes(self, data):
+        PictureOCR.seen.append(data)
+        if data in self.bad:
+            raise adapter.EngineFailure(OSError("model fetch failed"))
+        return ["read " + data.decode()]
+
+
+SLIDE = "<p:sld><a:p><a:r><a:t>{}</a:t></a:r></a:p></p:sld>"
+RELS = ('<Relationships>'
+        '<Relationship Id="rId1" Type="http://x/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>'
+        '{}</Relationships>')
+IMAGE_REL = '<Relationship Id="rId{}" Type="http://x/relationships/image" Target="{}"{}/>'
+
+
+def deck(**media):
+    return {"ppt/slides/slide1.xml": SLIDE.format("Agenda"),
+            "ppt/slides/_rels/slide1.xml.rels": RELS.format(
+                IMAGE_REL.format(2, "../media/a.png", "") + IMAGE_REL.format(3, "../media/drawing.emf", "")
+                + IMAGE_REL.format(4, "/ppt/media/b.jpg", "")
+                + IMAGE_REL.format(5, "https://example.org/c.png", ' TargetMode="External"')),
+            "ppt/slides/slide2.xml": SLIDE.format("Status"),
+            "ppt/slides/_rels/slide2.xml.rels": RELS.format(IMAGE_REL.format(2, "../media/a.png", "")),
+            "ppt/slides/slide3.xml": SLIDE.format("Ende"),
+            "ppt/media/a.png": b"one", "ppt/media/b.jpg": b"two", "ppt/media/drawing.emf": b"vector",
+            "ppt/media/unused.png": b"unused", **media}
+
+
+@pytest.fixture
+def picture_ocr(monkeypatch):
+    monkeypatch.setattr(adapter, "OCR", PictureOCR)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(PictureOCR, "bad", ())
+    monkeypatch.setattr(PictureOCR, "made", 0)
+    monkeypatch.setattr(PictureOCR, "seen", [])
+    monkeypatch.delenv("RGA_OCR_NO_OCR", raising=False)
+    return PictureOCR
+
+
+def test_pictures_on_pptx_slides_are_read_with_their_slide(picture_ocr):
+    pages = office(deck()).split(adapter.PAGE_BREAK)
+    assert pages == ["Agenda\nread one\nread two", "Status\nread one", "Ende"]
+    # one engine for the file, and a picture two slides show is read once;
+    # the vector drawing, the external link and the unused picture are not
+    assert picture_ocr.made == 1
+    assert picture_ocr.seen == [b"one", b"two"]
+    assert adapter.NOTES == []
+
+
+def test_pictures_on_odp_slides_and_an_empty_slide_keeps_its_page(picture_ocr):
+    page = "<draw:page>{}</draw:page>"
+    odp = ("<office:document-content>" + page.format("<text:p>Agenda</text:p>") + page.format("")
+           + page.format('<draw:frame><draw:image xlink:href="Pictures/a.png"/></draw:frame>')
+           + page.format('<text:p>Ende</text:p><draw:image xlink:href="./Pictures/a.png"/>'
+                         '<draw:image xlink:href="Pictures/gone.png"/>')
+           + "</office:document-content>")
+    pages = office({"content.xml": odp, "Pictures/a.png": b"one"}).split(adapter.PAGE_BREAK)
+    assert pages == ["Agenda", "", "read one", "Ende\nread one"]
+    assert picture_ocr.seen == [b"one"]
+
+
+def test_no_ocr_leaves_the_pictures_of_a_deck_alone(picture_ocr, monkeypatch):
+    monkeypatch.setenv("RGA_OCR_NO_OCR", "1")
+    assert office(deck()).split(adapter.PAGE_BREAK) == ["Agenda", "Status", "Ende"]
+    assert picture_ocr.made == 0
+
+
+def test_deck_keeps_its_text_when_some_pictures_fail(picture_ocr, monkeypatch):
+    monkeypatch.setattr(PictureOCR, "bad", (b"two",))
+    assert office(deck()).split(adapter.PAGE_BREAK) == ["Agenda\nread one", "Status\nread one", "Ende"]
+    assert adapter.NOTES == ["OCR failed on 1 of 2 pictures: OSError: model fetch failed"]
+
+
+def test_deck_is_retried_and_keeps_its_text_when_the_engine_is_down(picture_ocr, monkeypatch, tmp_path):
+    monkeypatch.setattr(PictureOCR, "bad", (b"one", b"two"))
+    with pytest.raises(adapter.EngineFailure) as e:
+        office(deck())
+    assert e.value.text.split(adapter.PAGE_BREAK) == ["Agenda", "Status", "Ende"]
+    # the adapter writes the text of the slides and reports a retry
+    out, events = run_main(monkeypatch, tmp_path, "office", office_file(deck()))
+    assert out == [adapter.PAGE_BREAK.join(["Agenda", "Status", "Ende"])]
+    assert events == ["start", "retry", "done"]
+
+
+def test_deck_with_more_pictures_than_the_limit(picture_ocr, monkeypatch):
+    monkeypatch.setattr(adapter, "MAX_PICTURES", 1)
+    assert office(deck()).split(adapter.PAGE_BREAK) == ["Agenda\nread one", "Status\nread one", "Ende"]
+    assert adapter.NOTES == ["more than 1 pictures, the rest was not read (RGA_OCR_MAX_PICTURES raises the limit)"]
+
+
+def test_a_picture_that_cannot_be_decoded_costs_only_itself(monkeypatch):
+    # the real OCR class up to the decoder: these bytes are no image
+    class NoEngine(adapter.OCR):
+        def __init__(self):
+            pass
+    monkeypatch.setattr(adapter, "OCR", NoEngine)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.delenv("RGA_OCR_NO_OCR", raising=False)
+    assert office(deck()).split(adapter.PAGE_BREAK) == ["Agenda", "Status", "Ende"]
+    assert adapter.NOTES == ["2 of 2 pictures could not be read"]
 
 
 def test_office_cells_of_a_row_stay_apart():

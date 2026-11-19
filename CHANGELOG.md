@@ -16,6 +16,11 @@ All notable changes to this project are documented here. The format follows
 - `--refresh` reads the files below PATH again and stores the new text,
   for one file or folder whose cached text is stale, without clearing the
   whole cache.
+- The pictures on pptx and odp slides are read by OCR and found under
+  the page of their slide. `--no-ocr` leaves them out. The first search
+  after the upgrade reads xlsx, pptx, ods and odp files again, and a deck
+  with many pictures takes as long as a scanned PDF of that many pages.
+  `RGA_OCR_MAX_PICTURES` (200) limits the pictures read of one file.
 - `--color auto|always|never`. `always` keeps the highlighting on a pipe
   (`rga-ocr --color always needle . | less -R`).
 - `--rga-adapters=LIST`, `+LIST` and `-LIST` change the adapters of one
@@ -57,6 +62,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- An odp slide without text no longer shifts the page numbers of the
+  slides after it.
 - `rga-ocr setup` ended in a traceback on an rga config that is not a
   JSON object or whose `custom_adapters` is not a list of objects, and
   `setup --apply` wrote over `"custom_adapters": {}`. Both leave the file

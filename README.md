@@ -92,7 +92,7 @@ tests, the layout of the repository and the design notes.
 | plain text | whatever `rg` reads as text | `rg` |
 | PDFs, text layer and scanned pages | pdf | `ocrpdf` (OCR for pages without text) |
 | photos, screenshots and scans | jpg jpeg png heic heif tif tiff webp gif bmp | `ocrimg` (OCR) |
-| spreadsheets and slides | xlsx pptx ods odp | `officexml` |
+| spreadsheets and slides | xlsx pptx ods odp | `officexml` (OCR for the pictures on slides) |
 | text documents | docx odt epub fb2 ipynb html htm | rga through pandoc |
 | archives, searched member by member | zip jar tar tgz gz xz bz2 zst | rga |
 | SQLite databases | db db3 sqlite sqlite3 | rga |
@@ -100,8 +100,9 @@ tests, the layout of the repository and the design notes.
 
 Hidden files and files ignored by `.gitignore` are searched; `.git`,
 `node_modules`, `.venv` and `__pycache__` directories are skipped (see
-[Names](#names)). Pictures inside Office documents are not read, and
-neither are the old binary formats `.doc`, `.xls` and `.ppt` (see
+[Names](#names)). The pictures on pptx and odp slides are read by OCR;
+pictures inside docx, odt, xlsx and ods files are not read, and neither
+are the old binary formats `.doc`, `.xls` and `.ppt` (see
 [Limits](#limits)).
 
 ## Platforms and engines
@@ -247,7 +248,7 @@ rga-ocr --version | -h | --help
                          (exit code 1 when the configured engine, or with auto every
                          engine, does not work here)
   --lang L               OCR languages, e.g. de-DE,en-US or "de-DE en-US" (default: the engine decides)
-  --no-ocr               PDF text layer only, images skipped
+  --no-ocr               PDF text layer only; images and pictures on slides skipped
   --force-ocr            OCR every PDF page even if it has a text layer
   --mail                 also search .eml/.mbox
   --accurate             sniff mime types instead of trusting extensions
@@ -405,6 +406,7 @@ Tuning values that rarely need changing are environment-only:
 | `RGA_OCR_PARAGRAPH_GAP` | 0.7     | line gap, in line heights, that starts a new output line |
 | `RGA_OCR_MAX_FRAMES`    | 500     | frames read of one multi-frame image (TIFF, GIF); the rest is left out and the file is reported as partly read |
 | `RGA_OCR_MAX_OFFICE_MB` | 256     | unpacked text read of one Office file, in MB; the rest is left out and the file is reported as partly read |
+| `RGA_OCR_MAX_PICTURES`  | 200     | pictures read of one pptx or odp file; the rest is left out and the file is reported as partly read |
 | `TESSDATA_PREFIX`       |         | directory with `.traineddata` files, checked before the tool's own |
 
 ## How the adapters work
@@ -419,7 +421,7 @@ the same engine packages.
 |-------------|-----------------------------------------------|--------------|
 | `ocrpdf` | pdf                                           | Text layer per page through pypdfium2 (PDFium), one line per paragraph (wrapped lines joined, de-hyphenated). Pages with fewer than 20 characters are rendered at 200 dpi and OCR'd. Pages are separated by form feed so rga prints `Page N:`. |
 | `ocrimg` | jpg jpeg png heic heif tif tiff webp gif bmp  | Pillow decodes (EXIF orientation applied, longest side capped at 3000 px, HEIC through pi-heif), the engine recognises text, lines that sit directly beneath each other are joined into one line so multi-word queries match across line breaks. Multi-frame TIFF: one block per frame. |
-| `officexml` | xlsx pptx ods odp                             | XML text from the zip. pptx/odp slides become pages. |
+| `officexml` | xlsx pptx ods odp                             | XML text from the zip. pptx/odp slides become pages; the pictures a slide shows are OCR'd and added to its page (not with `--no-ocr`). |
 
 Every engine returns lines with positions in the same frame, so the
 paragraph grouping is shared; how aggressively lines are joined still
@@ -572,17 +574,24 @@ and under a second afterwards.
   line starting with `error`.
 - The engine package version and the tuning variables
   (`RGA_OCR_MIN_TEXT_CHARS`, `RGA_OCR_RENDER_DPI`, `RGA_OCR_MAX_PIXELS`,
-  `RGA_OCR_PARAGRAPH_GAP`, `RGA_OCR_MAX_FRAMES`, `RGA_OCR_MAX_OFFICE_MB`)
+  `RGA_OCR_PARAGRAPH_GAP`, `RGA_OCR_MAX_FRAMES`, `RGA_OCR_MAX_OFFICE_MB`,
+  `RGA_OCR_MAX_PICTURES`)
   are not part of the cache key; clear the affected cache after changing
   them.
 - The old binary Office formats (`.doc`, `.xls`, `.ppt`), `.rtf` and
   `.msg` are not read: no adapter here or in rga handles them. Their
   names are still searched.
-- A multi-frame image (TIFF, GIF) is read up to 500 frames and an Office
-  file up to 256 MB of unpacked text. What lies beyond is left out, the
-  summary counts the file as partly read, and the text read so far is
-  found and cached. `RGA_OCR_MAX_FRAMES` and `RGA_OCR_MAX_OFFICE_MB`
-  raise the limits. A PDF has no page limit, and no file has a time
+- Pictures are read on pptx and odp slides only, and only the ones a
+  slide itself shows: not those of a slide master or layout, not vector
+  drawings (emf, wmf, svg), not charts. Pictures in docx and odt files
+  are not read, because pandoc extracts those types; pictures in xlsx
+  and ods files are not read either.
+- A multi-frame image (TIFF, GIF) is read up to 500 frames, an Office
+  file up to 256 MB of unpacked text, a slide deck up to 200 pictures.
+  What lies beyond is left out, the summary counts the file as partly
+  read, and the text read so far is found and cached.
+  `RGA_OCR_MAX_FRAMES`, `RGA_OCR_MAX_OFFICE_MB` and
+  `RGA_OCR_MAX_PICTURES` raise the limits. A PDF has no page limit, and no file has a time
   limit: one very large scan can hold up a search for minutes.
 - The cache has no size limit and never expires entries; `--cache-info`
   shows what it holds, `--clear-cache` trims it.
