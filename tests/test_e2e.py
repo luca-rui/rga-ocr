@@ -430,9 +430,41 @@ def test_adapter_error_forwarded(tool):
     assert r.code == 0, (r.out, r.err)
     assert grep(r.err, "^" + re.escape(P) + r": adapter pdf failed on broken\.pdf: "), r.err
     assert grep(r.out, r"a\.txt:1:needle here"), r.out
-    # the failed file is not cached as empty: the next search reads it again
-    r = tool.run("needle", broken_dir(tool))
-    assert grep(r.err, "^" + re.escape(P) + r": adapter pdf failed on broken\.pdf: "), r.err
+
+
+def test_engine_failure_is_not_cached(tool, tmp_path):
+    """While the OCR engine fails (a model download without network), files
+    produce no text. That must not stay in the cache: once the engine works,
+    the same search finds them, on disk and inside an archive."""
+    t = Tool(str(tmp_path / "down"))
+    os.makedirs(t.fx)
+    for name in ("photo.png", "bundle.zip"):
+        shutil.copy(os.path.join(tool.fx, name), t.fx)
+    with open(os.path.join(t.fx, "broken.pdf"), "w") as f:
+        f.write("this is not a pdf\n")
+    cfg = spy_config()
+    for a in cfg["custom_adapters"]:
+        a["args"] = [os.path.join(HERE, "failing_engine_adapter.py") if x.endswith("spy_adapter.py") else x
+                     for x in a["args"]]
+    with open(t.rga_config, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    down = os.path.join(t.root, "engine-down")
+    env = {"ADAPTER_ENGINE_DOWN": down}
+    failed = "^" + re.escape(P) + r": adapter image failed on photo\.png: OSError: model fetch failed \(not cached"
+    unreadable = "^" + re.escape(P) + r": adapter pdf failed on broken\.pdf: "
+    open(down, "w").close()
+    for _ in range(2):                       # the second run does not answer from the cache
+        r = t.search(env=env)
+        assert not grep(r.out, r"photo\.png") and grep(r.err, failed), (r.out, r.err)
+    assert grep(r.err, "^" + re.escape(P) + r": adapter \w+ failed on [^:]*: OSError: model fetch failed") , r.err
+    os.remove(down)
+    r = t.search(env=env)
+    assert grep(r.out, r"^(\./)?photo\.png:"), (r.out, r.err)
+    assert grep(r.out, r"^(\./)?bundle\.zip:"), (r.out, r.err)
+    assert not grep(r.err, "model fetch failed"), r.err
+    # a file that cannot be opened is a different case: reported once, then
+    # cached as empty until the file changes
+    assert not grep(r.err, unreadable), r.err
 
 
 # ------------------------------------------------------------- profile
@@ -492,7 +524,7 @@ def test_cache_info_and_clear(tool):
     assert grep(out, row + r"+[1-9][0-9]* +[0-9]+\.[0-9] MB  20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}  "), out
     # the extra entry sits under <root>/extra, so the common parent is <root>
     parent = os.path.dirname(os.path.realpath(tool.fx))
-    folders = re.escape(os.path.join(parent, "{fixtures (")) + r"[0-9]+\), extra \(1\)\}$"
+    folders = re.escape(os.path.join(parent, "{fixtures (")) + r"[0-9]+\), (broken \(1\), )?extra \(1\)\}$"
     assert grep(out, "^" + id_auto + " .*  " + folders), out
     assert grep(out, "^" + id_force + " +" + engine_name() + " +" + lang_auto + r" +yes +[1-9][0-9]* +"), out
 

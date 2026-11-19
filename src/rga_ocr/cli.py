@@ -992,26 +992,38 @@ def _config_unread(why):
     return None
 
 
-def forget_failed(con, failed):
-    """Remove the cache rows of files whose adapter run failed.
+ARCHIVE_ADAPTERS = ("zip", "tar", "decompress")       # rga's own; a row holds all members
+
+
+def forget_failed(con, failed, root):
+    """Remove the cache rows of files the OCR engine failed on.
 
     The adapter must exit 0 even when it fails (rg aborts the whole search
     otherwise), so rga stores the empty output as that file's text and never
     asks again: one failed model download or one run without the language
-    data would hide the file from every later search. rga keys a row on the
-    path of the file on disk; a failed archive member takes the archive's
-    row with it. Called after rga has exited. A failure here only costs the
-    retry, so it is not reported."""
+    data would hide the file from every later search. Only engine failures
+    are forgotten; a file that cannot be opened stays cached as empty until
+    it changes, like any other file.
+
+    rga keys a row on the absolute path of the file on disk. The member of
+    an archive is reported by its path inside the archive only, and its text
+    sits in the archive's row: after such a failure the archive rows below
+    the search root go. Called after rga has exited. A failure here only
+    costs the retry, so it is not reported."""
     import sqlite3
     if con is None or not failed:
         return
     try:
         for path in failed:
-            path = os.path.normpath(path)
-            con.execute(
-                "delete from preproc_cache where file_path = ?1"
-                " or substr(?1, 1, length(file_path) + 1) in (file_path || '/', file_path || ?2)",
-                (path, os.sep))
+            if os.path.isabs(path):
+                con.execute("delete from preproc_cache where file_path = ?", (os.path.normpath(path),))
+                continue
+            for base in {os.path.abspath(root), os.path.realpath(root)}:
+                prefix = base.rstrip(os.sep) + os.sep
+                con.execute(
+                    "delete from preproc_cache where adapter in (%s)"
+                    " and (substr(file_path, 1, ?) = ? or file_path = ?)"
+                    % ",".join("?" * len(ARCHIVE_ADAPTERS)), (*ARCHIVE_ADAPTERS, len(prefix), prefix, base))
         con.commit()
     except sqlite3.Error:
         pass
@@ -1138,10 +1150,13 @@ def run_contents(o, st, printer, root, query):
         for ev, mode, path, detail in Report(report_path).events():
             if ev == "error":
                 warn(f"adapter {mode} failed on {display_path(path, root)}: {detail}")
+            elif ev == "retry":
+                warn(f"adapter {mode} failed on {display_path(path, root)}: {detail}"
+                     f" (not cached, the next search reads the file again)")
                 failed.append(path)
             elif ev == "partial":
                 warn(f"adapter {mode}, {display_path(path, root)}: {detail}")
-        forget_failed(held, failed)
+        forget_failed(held, failed, root)
         # rga reports its own failures (config, cache, adapter spawn) with exit 1, like "no match"
         if status == 1 and re.search(rb"(?im)^error", err):
             status = 2

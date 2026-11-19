@@ -22,10 +22,11 @@ Environment (set by rga-ocr from the profile, flags, or directly):
   RGA_OCR_MAX_PIXELS      longest image side handed to the OCR engine (3000)
   RGA_OCR_PARAGRAPH_GAP   line gap, in line heights, that starts a new output line (0.7)
   RGA_OCR_REPORT          path of a report file: one line is appended when a file
-                          starts, one when it is done, one per error (the file
-                          produced no text; rga-ocr drops it from the cache so
-                          that it is read again) or partial result (some PDF
-                          pages could not be OCR'd; the rest stays cached)
+                          starts, one when it is done, and one per error (the
+                          file cannot be read), retry (the OCR engine failed;
+                          rga-ocr drops the file from the cache so that it is
+                          read again) or partial (some PDF pages could not be
+                          OCR'd; the rest stays cached)
 
 Rules: never open the virtual path (archive members do not exist on disk),
 never exit non-zero (rg would abort with exit 2), never emit NUL bytes.
@@ -119,17 +120,34 @@ def to_rgb(img):
     return img.convert("RGB")
 
 
+class EngineFailure(Exception):
+    """The OCR engine could not start or could not read an image the adapter
+    decoded: a problem of this run (a model download without network, missing
+    language data), not of the file. Reported as "retry", so that the file's
+    empty result does not stay in the cache."""
+
+    def __init__(self, cause):
+        super().__init__(f"{cause.__class__.__name__}: {cause}".replace("\n", " "))
+
+
 class OCR:
     """The configured engine plus paragraph grouping of its lines."""
 
     def __init__(self):
         from rga_ocr import engines
-        langs = engines.parse_langs(os.environ.get(ENV_PREFIX + "LANG"))
-        name = os.environ.get(ENV_PREFIX + "ENGINE", "").strip() or "auto"
-        self.engine = engines.resolve(name, langs)(langs)
+        try:
+            langs = engines.parse_langs(os.environ.get(ENV_PREFIX + "LANG"))
+            name = os.environ.get(ENV_PREFIX + "ENGINE", "").strip() or "auto"
+            self.engine = engines.resolve(name, langs)(langs)
+        except Exception as e:  # noqa: BLE001
+            raise EngineFailure(e) from e
 
     def text(self, img):
-        return paragraphs(self.engine.recognize(img))
+        try:
+            lines = self.engine.recognize(img)
+        except Exception as e:  # noqa: BLE001
+            raise EngineFailure(e) from e
+        return paragraphs(lines)
 
     def text_of_bytes(self, data):
         """OCR every frame of an encoded image; returns list of texts."""
@@ -234,7 +252,7 @@ def mode_pdf(data):
                 tried += 1
                 try:
                     text = ocr.text(to_rgb(page.render(scale=scale).to_pil()))
-                except Exception as e:  # noqa: BLE001
+                except EngineFailure as e:
                     failed.append((number, e))
                     text = ""
                 layer = (layer + "\n" + text).strip() if force else text
@@ -244,12 +262,10 @@ def mode_pdf(data):
         doc.close()
     if failed:
         number, e = failed[0]
-        msg = f"{e.__class__.__name__}: {e}".replace("\n", " ")
         if len(failed) == tried:
-            # no page could be OCR'd: the engine is the problem (model fetch,
-            # language data), not the file; fail so the file is retried
-            raise RuntimeError(f"OCR failed on every page; page {number}: {msg}")
-        NOTES.append(f"OCR failed on {len(failed)} of {tried} pages, first page {number}: {msg}")
+            # no page could be OCR'd: the engine is the problem, not one page
+            raise e
+        NOTES.append(f"OCR failed on {len(failed)} of {tried} pages, first page {number}: {e}")
     return PAGE_BREAK.join(pages)
 
 
@@ -350,6 +366,9 @@ def main():
         for note in NOTES:
             sys.stderr.write(f"{TAG}[{mode}]: {note}\n")
             report("partial", mode, path, note)
+    except EngineFailure as e:
+        sys.stderr.write(f"{TAG}[{mode}]: {e}\n")
+        report("retry", mode, path, str(e))
     except Exception as e:  # noqa: BLE001
         msg = f"{e.__class__.__name__}: {e}".replace("\n", " ")
         sys.stderr.write(f"{TAG}[{mode}]: {msg}\n")

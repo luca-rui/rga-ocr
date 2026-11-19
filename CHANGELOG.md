@@ -13,13 +13,15 @@ All notable changes to this project are documented here. The format follows
   superscript) were shuffled and words were split at kerning pairs, so a
   phrase search could miss text that is in the file. The text now follows
   PDFium's reading order.
-- A file whose adapter run failed (a model download without network,
-  missing language data, a damaged file) is no longer cached as empty and
-  skipped from then on. It is read again on the next search. A file that
-  stays unreadable is tried, and reported, on every search.
+- A file the OCR engine failed on (a model download without network,
+  missing language data, an engine that does not start) is no longer cached
+  as empty and skipped from then on. It is read again on the next search,
+  and the warning says so. When such a file sits inside an archive, the
+  archives below the search root are read again.
 - A PDF with a page that cannot be OCR'd keeps the text of its other
-  pages; the failed pages are named in a warning. When no page can be
-  OCR'd, the file counts as failed and is retried.
+  pages; the failed pages are named in a warning, once. When no page can
+  be OCR'd, the file counts as an engine failure and is read again on the
+  next search.
 - xlsx, pptx, ods, odp: a word split over several text runs stays one word
   ("Kesselanlage", not "Kessel anlage"), and the numeric cells of a row
   are separated ("12 34", not "1234").

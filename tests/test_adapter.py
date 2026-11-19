@@ -201,7 +201,7 @@ class FakeOCR:
     def text(self, img):
         self.calls += 1
         if self.calls in self.bad:
-            raise OSError("model fetch failed")
+            raise adapter.EngineFailure(OSError("model fetch failed"))
         return f"scan {self.calls}"
 
 
@@ -225,31 +225,62 @@ def test_pdf_keeps_the_pages_read_when_one_page_fails(tmp_path, monkeypatch):
 
 
 def test_pdf_fails_as_a_whole_when_no_page_could_be_read(tmp_path, monkeypatch):
-    # the engine is the problem then: an error, so that the file is retried
+    # the engine is the problem then, not one page
     monkeypatch.setattr(adapter, "OCR", FakeOCR)
     monkeypatch.setattr(adapter, "NOTES", [])
     monkeypatch.setattr(FakeOCR, "bad", (1, 2))
-    with pytest.raises(RuntimeError, match="OCR failed on every page; page 1: OSError"):
+    with pytest.raises(adapter.EngineFailure, match="OSError: model fetch failed"):
         adapter.mode_pdf(scan_pdf(tmp_path, 2))
     assert adapter.NOTES == []
+
+
+def test_ocr_wraps_engine_errors(monkeypatch):
+    monkeypatch.setenv("RGA_OCR_ENGINE", "bogus")
+    with pytest.raises(adapter.EngineFailure, match="EngineError: unknown engine 'bogus'"):
+        adapter.OCR()
+
+    class Broken(adapter.OCR):
+        def __init__(self):
+            class Engine:
+                def recognize(self, img):
+                    raise OSError("no\nmodel")
+            self.engine = Engine()
+    with pytest.raises(adapter.EngineFailure, match="OSError: no model"):
+        Broken().text(None)
+
+
+def run_main(monkeypatch, tmp_path, mode, data):
+    """adapter.main() on data; returns (output, report events)."""
+    report = tmp_path / "report"
+    monkeypatch.setattr(adapter, "REPORT", str(report))
+    monkeypatch.setattr(sys, "argv", ["adapter", mode, "/x/file"])
+
+    class Stdin:
+        buffer = __import__("io").BytesIO(data)
+    monkeypatch.setattr(sys, "stdin", Stdin)
+    out = []
+    monkeypatch.setattr(adapter, "write_out", out.append)
+    adapter.main()
+    return out, [l.split("\t")[0] for l in report.read_text(encoding="utf-8").splitlines()]
+
+
+def test_adapter_reports_engine_failures_as_retry_and_unreadable_files_as_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(FakeOCR, "bad", (1, 2))
+    assert run_main(monkeypatch, tmp_path, "pdf", scan_pdf(tmp_path, 2)) == ([], ["start", "retry", "done"])
+    (tmp_path / "report").unlink()
+    assert run_main(monkeypatch, tmp_path, "pdf", b"this is not a pdf") == ([], ["start", "error", "done"])
+    (tmp_path / "report").unlink()
+    assert run_main(monkeypatch, tmp_path, "image", b"not an image") == ([], ["start", "error", "done"])
 
 
 def test_adapter_reports_a_partial_result(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(adapter, "OCR", FakeOCR)
     monkeypatch.setattr(adapter, "NOTES", [])
     monkeypatch.setattr(FakeOCR, "bad", (1,))
-    report = tmp_path / "report"
-    monkeypatch.setattr(adapter, "REPORT", str(report))
-    monkeypatch.setattr(sys, "argv", ["adapter", "pdf", "/x/scan.pdf"])
-
-    class Stdin:
-        buffer = __import__("io").BytesIO(scan_pdf(tmp_path, 2))
-    monkeypatch.setattr(sys, "stdin", Stdin)
-    out = []
-    monkeypatch.setattr(adapter, "write_out", out.append)
-    adapter.main()
+    out, events = run_main(monkeypatch, tmp_path, "pdf", scan_pdf(tmp_path, 2))
     assert out == [adapter.PAGE_BREAK + "scan 2"]
-    events = [l.split("\t")[0] for l in report.read_text(encoding="utf-8").splitlines()]
     assert events == ["start", "partial", "done"]
 
 

@@ -144,21 +144,40 @@ def test_forget_failed_drops_the_rows_of_failed_files(tmp_path):
     d = str(tmp_path / "vision-auto")
     held = cli.prepare_cache(d)
     root = os.path.join(os.path.abspath(os.sep), "docs")
-    files = [os.path.join(root, n) for n in ("bad.pdf", "good.pdf", "box.zip", "box.zipper", "bad.pdf2")]
-    for f in files:
-        held.execute("insert into preproc_cache (config_hash, adapter, adapter_version, active_adapters, "
-                     "file_path, file_mtime_unix_ms, text_content_zstd) values ('h', 'a', 1, 'x', ?, 0, x'00')", (f,))
-    held.commit()
-    # paths as the adapter reports them: with rga's "/./" after the search
-    # root, and an archive member below the archive's own path
-    cli.forget_failed(held, [os.path.join(root, ".", "bad.pdf"),
-                             os.path.join(root, ".", "box.zip", "inner", "scan.png")])
-    left = [r[0] for r in held.execute("select file_path from preproc_cache order by rowid")]
-    assert left == [files[1], files[3], files[4]]
-    cli.forget_failed(held, [])
-    cli.forget_failed(None, [files[1]])
+    rows = [("ocrpdf", os.path.join(root, "bad.pdf")), ("ocrpdf", os.path.join(root, "good.pdf")),
+            ("ocrpdf", os.path.join(root, "bad.pdf2")), ("zip", os.path.join(root, "sub", "box.zip")),
+            ("zip", os.path.join(root + "2", "box.zip"))]
+
+    def fill():
+        held.execute("delete from preproc_cache")
+        for adapter_name, f in rows:
+            held.execute("insert into preproc_cache (config_hash, adapter, adapter_version, active_adapters, "
+                         "file_path, file_mtime_unix_ms, text_content_zstd) values ('h', ?, 1, 'x', ?, 0, x'00')",
+                         (adapter_name, f))
+        held.commit()
+
+    def left():
+        return [r[0] for r in held.execute("select file_path from preproc_cache order by rowid")]
+
+    # a file on disk: reported with rga's "/./" after the search root
+    fill()
+    cli.forget_failed(held, [os.path.join(root, ".", "bad.pdf")], root)
+    assert left() == [f for _a, f in rows[1:]]
+    # an archive member: reported by its inner path, so the archive rows
+    # below the search root go, and nothing else
+    fill()
+    cli.forget_failed(held, [os.path.join("inner", "scan.png")], root)
+    assert left() == [f for _a, f in rows[:3] + rows[4:]]
+    # the search root is the archive itself
+    fill()
+    cli.forget_failed(held, ["inner/scan.png"], rows[3][1])
+    assert left() == [f for _a, f in rows[:3] + rows[4:]]
+    fill()
+    cli.forget_failed(held, [], root)
+    cli.forget_failed(None, [rows[1][1]], root)
+    assert len(left()) == 5
     held.close()
-    cli.forget_failed(held, [files[1]])          # a closed or broken database costs only the retry
+    cli.forget_failed(held, [rows[1][1]], root)   # a closed or broken database costs only the retry
 
 
 @pytest.mark.parametrize("flag,key,value", [
