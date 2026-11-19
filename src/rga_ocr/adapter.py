@@ -60,6 +60,8 @@ MIN_TEXT_CHARS = _env_num("MIN_TEXT_CHARS", 20, int)   # PDF page with fewer cha
 RENDER_DPI = _env_num("RENDER_DPI", 200, int)
 MAX_PIXELS = _env_num("MAX_PIXELS", 3000, int)        # longest image side handed to the engine
 PARAGRAPH_GAP = _env_num("PARAGRAPH_GAP", 0.7, float)
+MAX_FRAMES = _env_num("MAX_FRAMES", 500, int)         # frames read of one multi-frame image
+MAX_OFFICE_MB = _env_num("MAX_OFFICE_MB", 256, int)   # unpacked XML read of one office file
 PAGE_BREAK = "\x0c"
 
 
@@ -81,9 +83,10 @@ def write_out(text):
 
 # ------------------------------------------------------------------ ocr
 
-def decode(data):
-    """Every frame of an encoded image as an RGB Pillow image: EXIF orientation
-    applied, longest side capped at MAX_PIXELS."""
+def frames(data):
+    """Yield every frame of an encoded image as an RGB Pillow image: EXIF
+    orientation applied, longest side capped at MAX_PIXELS. One frame at a
+    time: a TIFF of a thousand pages does not sit in memory as a whole."""
     from PIL import Image, ImageOps, ImageSequence, UnidentifiedImageError
     try:
         import pi_heif
@@ -101,7 +104,6 @@ def decode(data):
                 "HEIC and HEIF need pi-heif, which is not installed here (no wheels for "
                 "Python 3.15 or Windows on arm64 yet); use Python 3.11 to 3.14")) from None
         raise RuntimeError("not a decodable image") from None
-    frames = []
     with src:
         for frame in ImageSequence.Iterator(src):
             img = to_rgb(ImageOps.exif_transpose(frame))
@@ -109,8 +111,12 @@ def decode(data):
                 img.thumbnail((MAX_PIXELS, MAX_PIXELS))
             else:
                 img.load()
-            frames.append(img)
-    return frames
+            yield img
+
+
+def decode(data):
+    """All frames of an encoded image as a list."""
+    return list(frames(data))
 
 
 def to_rgb(img):
@@ -169,8 +175,17 @@ class OCR:
         return paragraphs(lines)
 
     def text_of_bytes(self, data):
-        """OCR every frame of an encoded image; returns list of texts."""
-        return [self.text(img) for img in decode(data)]
+        """OCR the frames of an encoded image, MAX_FRAMES at most; returns
+        list of texts. Frames beyond that are left out and reported: the
+        text read so far is kept, the file counts as partly read."""
+        texts = []
+        for number, img in enumerate(frames(data), 1):
+            if number > MAX_FRAMES:
+                NOTES.append(f"more than {MAX_FRAMES} frames, the rest was not read "
+                             f"({ENV_PREFIX}MAX_FRAMES raises the limit)")
+                break
+            texts.append(self.text(img))
+        return texts
 
 
 def paragraphs(lines, ordered=False):
@@ -314,27 +329,52 @@ def _strip_xml(raw, para_tags):
     return "\n".join(l for l in lines if l)
 
 
+class _Members:
+    """Reads the XML members of an office file up to MAX_OFFICE_MB of
+    unpacked text in total. The bytes read count, not the size the archive
+    states: a few kilobytes can unpack to gigabytes. What lies beyond the
+    limit is left out and reported once."""
+
+    def __init__(self, z):
+        self.z = z
+        self.left = max(MAX_OFFICE_MB, 0) * 1024 * 1024
+        self.cut = False
+
+    def read(self, name):
+        with self.z.open(name) as f:
+            raw = f.read(self.left + 1)
+        if len(raw) > self.left:
+            raw = raw[:self.left]
+            if not self.cut:
+                self.cut = True
+                NOTES.append(f"more than {MAX_OFFICE_MB} MB of text, read up to there, the rest "
+                             f"from {name} on was not ({ENV_PREFIX}MAX_OFFICE_MB raises the limit)")
+        self.left -= len(raw)
+        return raw.decode("utf-8", "replace")
+
+
 def mode_office(data):
     pages = []
     with zipfile.ZipFile(io.BytesIO(data)) as z:
+        m = _Members(z)
         names = z.namelist()
         slides = sorted(
             (n for n in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
             key=lambda n: int(re.search(r"(\d+)\.xml$", n).group(1)))
         if slides:                                                   # pptx
             for n in slides:
-                pages.append(_strip_xml(z.read(n).decode("utf-8", "replace"), ["a:p"]))
+                pages.append(_strip_xml(m.read(n), ["a:p"]))
         elif "xl/workbook.xml" in names:                             # xlsx
             parts = []
             if "xl/sharedStrings.xml" in names:
-                parts.append(_strip_xml(z.read("xl/sharedStrings.xml").decode("utf-8", "replace"), ["si"]))
+                parts.append(_strip_xml(m.read("xl/sharedStrings.xml"), ["si"]))
             for n in sorted(n for n in names if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)):
-                raw = z.read(n).decode("utf-8", "replace")
+                raw = m.read(n)
                 raw = re.sub(r'<c\b[^>]*\bt="s"[^>]*>.*?</c>', "", raw, flags=re.S)   # shared-string refs
                 parts.append(_strip_xml(raw, ["row"]))
             pages.append("\n".join(p for p in parts if p))
         elif "content.xml" in names:                                 # ods / odp
-            raw = z.read("content.xml").decode("utf-8", "replace")
+            raw = m.read("content.xml")
             draw_pages = re.split(r"</draw:page>", raw)
             if len(draw_pages) > 1:                                  # odp
                 for p in draw_pages:

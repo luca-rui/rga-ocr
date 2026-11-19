@@ -758,3 +758,20 @@ def test_registered_file_types():
     assert by_name["ocrimg"]["extensions"] == sc.IMAGE_EXT and by_name["ocrimg"]["mimetypes"] == sc.IMAGE_MIME
     assert by_name["officexml"]["extensions"] == sc.OFFICE_EXT
     assert by_name["ocrpdf"]["extensions"] == ["pdf"]
+
+
+def test_setup_leaves_a_config_alone_that_is_not_shaped_like_one(tmp_path, capsys):
+    """Dry run and --apply: no traceback, and --apply does not write over a
+    file rga itself would refuse."""
+    for text in ("[]", '"x"', "null", '{"custom_adapters": {}}', '{"custom_adapters": [1]}'):
+        odd = str(tmp_path / "odd.jsonc")
+        for apply in (False, True):
+            with open(odd, "w", encoding="utf-8") as f:
+                f.write(text)
+            out = Rec()
+            assert sc.check_rga_config(out, apply, odd) is False, text
+            assert any("not shaped like an rga config" in ln for ln in out.lines), (text, out.lines)
+            assert open(odd, encoding="utf-8").read() == text
+    assert os.listdir(tmp_path) == ["odd.jsonc"]
+    assert sc.shape_problem({}) is None and sc.shape_problem({"custom_adapters": []}) is None
+    capsys.readouterr()

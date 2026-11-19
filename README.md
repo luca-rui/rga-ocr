@@ -400,6 +400,8 @@ Tuning values that rarely need changing are environment-only:
 | `RGA_OCR_RENDER_DPI`    | 200     | PDF render resolution for OCR |
 | `RGA_OCR_MAX_PIXELS`    | 3000    | longest image side handed to the engine |
 | `RGA_OCR_PARAGRAPH_GAP` | 0.7     | line gap, in line heights, that starts a new output line |
+| `RGA_OCR_MAX_FRAMES`    | 500     | frames read of one multi-frame image (TIFF, GIF); the rest is left out and the file is reported as partly read |
+| `RGA_OCR_MAX_OFFICE_MB` | 256     | unpacked text read of one Office file, in MB; the rest is left out and the file is reported as partly read |
 | `TESSDATA_PREFIX`       |         | directory with `.traineddata` files, checked before the tool's own |
 
 ## How the adapters work
@@ -462,7 +464,10 @@ The cache keeps what was read. For every PDF, image and Office file it
 holds the extracted text and the full path, compressed but not encrypted,
 under `cache_dir` in your user's cache directory (see
 [Profile and paths](#profile-and-paths)). Whoever can read that directory
-can read the text of the documents you searched. `rga-ocr --cache-info`
+can read the text of the documents you searched. On macOS and Linux
+`rga-ocr` creates the cache directories for your user only (mode 0700);
+a directory that exists keeps its mode, so a cache from 0.2.4 or earlier
+stays as it was until you run `chmod -R go-rwx` on it. `rga-ocr --cache-info`
 shows what is there, `rga-ocr --clear-cache all` removes it, and
 `--no-cache` searches without leaving anything behind.
 
@@ -564,8 +569,18 @@ and under a second afterwards.
   line starting with `error`.
 - The engine package version and the tuning variables
   (`RGA_OCR_MIN_TEXT_CHARS`, `RGA_OCR_RENDER_DPI`, `RGA_OCR_MAX_PIXELS`,
-  `RGA_OCR_PARAGRAPH_GAP`) are not part of the cache key; clear the
-  affected cache after changing them.
+  `RGA_OCR_PARAGRAPH_GAP`, `RGA_OCR_MAX_FRAMES`, `RGA_OCR_MAX_OFFICE_MB`)
+  are not part of the cache key; clear the affected cache after changing
+  them.
+- The old binary Office formats (`.doc`, `.xls`, `.ppt`), `.rtf` and
+  `.msg` are not read: no adapter here or in rga handles them. Their
+  names are still searched.
+- A multi-frame image (TIFF, GIF) is read up to 500 frames and an Office
+  file up to 256 MB of unpacked text. What lies beyond is left out, the
+  summary counts the file as partly read, and the text read so far is
+  found and cached. `RGA_OCR_MAX_FRAMES` and `RGA_OCR_MAX_OFFICE_MB`
+  raise the limits. A PDF has no page limit, and no file has a time
+  limit: one very large scan can hold up a search for minutes.
 - The cache has no size limit and never expires entries; `--cache-info`
   shows what it holds, `--clear-cache` trims it.
 - Content hits of a long first search arrive in batches, not one by one:

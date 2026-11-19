@@ -524,3 +524,23 @@ def test_output_a_stream_cannot_encode_is_escaped(cli, tmp_path):
     # a pipe on Windows gets UTF-8 whatever the environment says
     want = "Kessel-日本.txt".encode() if sys.platform == "win32" else b"Kessel-\\u65e5\\u672c.txt"
     assert want in p.stdout, p.stdout
+
+
+@pytest.mark.skipif(os.name != "posix", reason="directory modes are POSIX")
+def test_cache_directories_are_created_for_the_user_only(tmp_path):
+    old = os.umask(0o022)
+    try:
+        d = tmp_path / "shared" / "rga-ocr" / "vision-auto"
+        (tmp_path / "shared").mkdir(mode=0o755)
+        con = cli.prepare_cache(str(d))
+        if con is not None:
+            con.close()
+        assert (d / "cache.sqlite3").is_file()
+        assert oct(d.stat().st_mode & 0o777) == "0o700"
+        assert oct(d.parent.stat().st_mode & 0o777) == "0o700"
+        # a directory that was there keeps its mode
+        assert oct((tmp_path / "shared").stat().st_mode & 0o777) == "0o755"
+        cli.private_makedirs(str(tmp_path / "shared"))
+        assert oct((tmp_path / "shared").stat().st_mode & 0o777) == "0o755"
+    finally:
+        os.umask(old)
