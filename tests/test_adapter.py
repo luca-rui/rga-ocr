@@ -333,6 +333,7 @@ def test_input_that_is_no_document_is_skipped_without_an_error(mode, tmp_path, m
     could be read, so nothing is reported as failed; the same for a text
     file under the wrong extension and for an empty one."""
     monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)        # a machine without an engine fails earlier
     for data, events in ((APPLE_DOUBLE, ["skipped"]), (b" \n\n", ["skipped"]),
                          (b"this is no document of any kind\n", ["start", "skipped"])):   # the parser said so
         assert run_main(monkeypatch, tmp_path, mode, data) == ([], events), data

@@ -529,7 +529,8 @@ STATS = {"starts": 0, "init": 0.0, "pages": 0, "ocr": 0.0}
 
 def report(event, mode, path, detail=""):
     """Append one line to the report file in a single O_APPEND write, so the
-    lines of parallel adapters do not interleave (short writes stay atomic)."""
+    lines of parallel adapters do not interleave (short writes stay atomic;
+    on Windows a lock stands in for that)."""
     if not REPORT:
         return
     try:
@@ -537,10 +538,44 @@ def report(event, mode, path, detail=""):
         fd = os.open(REPORT, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
         try:
             line = f"{event}\t{mode}\t{path}\t{detail}\n".replace("\r", " ")
-            os.write(fd, line.encode("utf-8", "replace")[:4000])
+            held = _report_lock(fd)
+            try:
+                os.write(fd, line.encode("utf-8", "replace")[:4000])
+            finally:
+                _report_unlock(fd, held)
         finally:
             os.close(fd)
     except OSError:
+        pass
+
+
+# Windows has no atomic append: O_APPEND there is a seek and a write, and two
+# adapters that end at the same moment (two copies of one file do) write over
+# each other's line. One byte far behind anything the file will hold is locked
+# for the write; the reader of the file never gets there.
+_LOCK_AT = 1 << 30
+
+
+def _report_lock(fd):
+    if sys.platform != "win32":
+        return False
+    try:
+        import msvcrt
+        os.lseek(fd, _LOCK_AT, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)      # waits, up to ten seconds
+        return True
+    except (ImportError, OSError):
+        return False                                # write without it, as before
+
+
+def _report_unlock(fd, held):
+    if not held:
+        return
+    try:
+        import msvcrt
+        os.lseek(fd, _LOCK_AT, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except (ImportError, OSError):
         pass
 
 

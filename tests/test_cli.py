@@ -572,17 +572,25 @@ def test_display_path_with_several_roots(tmp_path):
 
 # ------------------------------------------------- what the adapters report
 
+# as rga names a file below the search root: absolute, on every platform
+_R = os.path.abspath(os.sep + "r")
+
+
+def _under_r(name):
+    return os.path.join(_R, ".", name)
+
+
 def test_one_failure_is_one_line_and_many_of_one_kind_are_one_line_too():
-    ev = [["start", "pdf", "/r/./a.pdf", ""],
-          ["error", "pdf", "/r/./a.pdf", "password protected"],
-          ["error", "pdf", "/r/./b.pdf", "password protected"],
-          ["error", "pdf", "/r/./c.pdf", "PdfiumError: Data format error"],
-          ["retry", "image", "/r/./x.png", "OSError: model fetch failed"],
+    ev = [["start", "pdf", _under_r("a.pdf"), ""],
+          ["error", "pdf", _under_r("a.pdf"), "password protected"],
+          ["error", "pdf", _under_r("b.pdf"), "password protected"],
+          ["error", "pdf", _under_r("c.pdf"), "PdfiumError: Data format error"],
+          ["retry", "image", _under_r("x.png"), "OSError: model fetch failed"],
           ["retry", "image", "in/zip.jpg", "OSError: model fetch failed"],
-          ["partial", "office", "/r/./d.pptx", "2 of 9 pictures could not be read"],
+          ["partial", "office", _under_r("d.pptx"), "2 of 9 pictures could not be read"],
           ["skipped", "pdf", "__MACOSX/._a.pdf", "macOS metadata (AppleDouble), not a document"],
-          ["time", "pdf", "/r/./a.pdf", "t0=1;t1=2"]]
-    lines, failed = cli.adapter_messages(ev, "/r")
+          ["time", "pdf", _under_r("a.pdf"), "t0=1;t1=2"]]
+    lines, failed = cli.adapter_messages(ev, _R)
     assert lines == [
         "adapter pdf failed on 2 files: password protected (first: a.pdf; --verbose lists them)",
         "adapter pdf failed on c.pdf: PdfiumError: Data format error",
@@ -590,8 +598,8 @@ def test_one_failure_is_one_line_and_many_of_one_kind_are_one_line_too():
         " not cached, the next search reads the files again)",
         "adapter office, d.pptx: 2 of 9 pictures could not be read"]
     # grouping is for the eye only: every file the engine failed on is forgotten
-    assert failed == ["/r/./x.png", "in/zip.jpg"]
-    lines, failed = cli.adapter_messages(ev, "/r", verbose=True)
+    assert failed == [_under_r("x.png"), "in/zip.jpg"]
+    lines, failed = cli.adapter_messages(ev, _R, verbose=True)
     assert lines == [
         "adapter pdf failed on a.pdf: password protected",
         "adapter pdf failed on b.pdf: password protected",
@@ -601,22 +609,22 @@ def test_one_failure_is_one_line_and_many_of_one_kind_are_one_line_too():
         " (not cached, the next search reads the file again)",
         "adapter office, d.pptx: 2 of 9 pictures could not be read",
         "skipped __MACOSX/._a.pdf: macOS metadata (AppleDouble), not a document"]
-    assert failed == ["/r/./x.png", "in/zip.jpg"]
+    assert failed == [_under_r("x.png"), "in/zip.jpg"]
 
 
 def test_skipped_input_alone_says_nothing():
     ev = [["skipped", "pdf", "__MACOSX/._a.pdf", "macOS metadata (AppleDouble), not a document"]] * 500
-    assert cli.adapter_messages(ev, "/r") == ([], [])
+    assert cli.adapter_messages(ev, _R) == ([], [])
 
 
 def test_timings_report():
     def t(mode, path, t0, t1, what="read", starts=0, init=0, pages=0, ocr=0):
         return ["time", mode, path, f"t0={t0};t1={t1};what={what};starts={starts};init={init};pages={pages};ocr={ocr}"]
-    ev = [t("pdf", "/r/./a.pdf", 100.0, 102.0, starts=1, init=0.5, pages=2, ocr=1.2),
-          t("pdf", "/r/./b.pdf", 101.0, 103.0, what="hit"),
+    ev = [t("pdf", _under_r("a.pdf"), 100.0, 102.0, starts=1, init=0.5, pages=2, ocr=1.2),
+          t("pdf", _under_r("b.pdf"), 101.0, 103.0, what="hit"),
           t("pdf", "in/zip.pdf", 105.0, 106.0, what="skipped"),
-          ["done", "pdf", "/r/./a.pdf", ""], ["time", "pdf", "x", "garbage"]]
-    lines = cli.timing_lines(ev, 10.0, 100.0, 110.0, "/r")
+          ["done", "pdf", _under_r("a.pdf"), ""], ["time", "pdf", "x", "garbage"]]
+    lines = cli.timing_lines(ev, 10.0, 100.0, 110.0, _R)
     assert lines[0] == ("timings: wall 10.0 s, 3 adapter runs with 5.0 s in sum (0.5 at once on average, "
                         "2 at most), 6.0 s with no adapter running")
     rows = [l.split() for l in lines[1:4]]
@@ -624,7 +632,7 @@ def test_timings_report():
     assert rows[1] == ["pdf", "in", "archives", "1", "1.0", "0", "1", "0", "0.0", "0", "0.0"]
     assert rows[2] == ["pdf", "on", "disk", "2", "4.0", "1", "0", "1", "0.5", "2", "1.2"]
     assert lines[4] == "  slowest: 2.0 s  a.pdf"
-    assert "reported no times" in cli.timing_lines([["done", "pdf", "/r/./a.pdf", ""]], 1.0, 0, 1, "/r")[0]
+    assert "reported no times" in cli.timing_lines([["done", "pdf", _under_r("a.pdf"), ""]], 1.0, 0, 1, _R)[0]
 
 
 def test_verbose_and_timings_are_flags_of_their_own():

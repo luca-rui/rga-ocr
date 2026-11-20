@@ -34,6 +34,12 @@ All notable changes to this project are documented here. The format follows
   and so does an Office file that is encrypted or an old binary format
   under a new extension, in place of the parser's error alone.
 
+### Fixed
+
+- Windows: two adapters that ended at the same moment could write over
+  each other's line in the run's report, so a file went missing from the
+  count of files read, or an engine failure from the messages.
+
 ## [0.2.5] - 2026-11-20
 
 ### Added
