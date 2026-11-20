@@ -459,6 +459,18 @@ def test_a_damaged_content_cache_file_is_no_hit(text_cache, tmp_path, monkeypatc
     assert adapter.text_get(key) == b"scan 1"
 
 
+def test_a_content_cache_that_cannot_be_written_costs_nothing_else(text_cache, tmp_path, monkeypatch):
+    """A full disk, a directory of another user, a file in the directory's
+    place: the text is still given and the file is not reported as failed."""
+    blocked = tmp_path / "in-the-way"
+    blocked.write_bytes(b"a file, not a directory")
+    monkeypatch.setattr(adapter, "TEXT_CACHE", str(blocked))
+    data = scan_pdf(tmp_path, 1)
+    for _ in range(2):
+        assert run_main(monkeypatch, tmp_path, "pdf", data) == ([b"scan 1"], ["start", "done"])
+    assert blocked.read_bytes() == b"a file, not a directory"
+
+
 def test_without_the_variable_nothing_is_stored(tmp_path, monkeypatch):
     monkeypatch.setattr(adapter, "TEXT_CACHE", "")
     monkeypatch.setattr(adapter, "NOTES", [])
