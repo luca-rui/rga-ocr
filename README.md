@@ -260,6 +260,8 @@ rga-ocr --version | -h | --help
   --no-cache             do not read or write the OCR cache
   --refresh              read the files below PATH again and store the new text
   --progress / --no-progress   status line while searching and a summary after (default on)
+  --verbose              list every file an adapter failed on or skipped, not one line per reason
+  --timings              after the search: where the time of the content pass went
   --init-config          write a commented profile and exit
   --cache-info           list the caches and exit
   --clear-cache CACHE-ID|DIR ...|all   delete the named caches, or every cache, and exit
@@ -329,8 +331,13 @@ cleared before every hit, and when the content pass ends it is replaced by
 a summary:
 
 ```
-searched 12.4 s · 3 hits · 14 files read
+searched 12.4 s · 3 hits · 14 files read · 2 skipped
 ```
+
+"skipped" counts input that carries a document's extension and is no
+document: the `__MACOSX/._*` entries macOS puts into zips, the `~$` lock
+files Office leaves behind, empty files. They produce no message;
+`--verbose` lists them with the reason.
 
 Both go to stderr and are only shown when stdout and stderr are a
 terminal and `--json` is not given, so scripts never see it.
@@ -456,17 +463,28 @@ has several children, the three with the most entries.
 `rga-ocr --clear-cache 276f047` (or the directory name, `vision-auto-force`)
 deletes that cache, several can be given at once, and `rga-ocr
 --clear-cache all` deletes every cache under `cache_dir` after listing
-what it holds; files that are not caches stay, and `cache_dir` itself is
+what it holds (the text store below included); files that are not caches stay, and `cache_dir` itself is
 removed only when it is empty afterwards. A bare `--clear-cache` only lists the caches and exits 2, so a
 forgotten argument cannot wipe everything. `--dry-run` prints what would
 be removed and deletes nothing.
+
+Next to rga's cache, each of these directories holds a second store,
+`text/`, keyed by the content of a file instead of its path: the SHA-256
+of the bytes together with the adapter, its version and the settings that
+change the text. A file that was copied, renamed, moved or packed into a
+zip is found there and not read again, and so is the second copy of an
+invoice that sits in three folders. Only complete results are stored. A
+file whose read failed, in full or in part, is not. `--no-cache` leaves the
+store out, `--refresh` reads the files again and writes the new text, and
+`--clear-cache` removes it with the cache it belongs to.
 
 ## Privacy and network access
 
 Your documents never leave the machine: every engine runs locally.
 
 The cache keeps what was read. For every PDF, image and Office file it
-holds the extracted text and the full path, compressed but not encrypted,
+holds the extracted text and the full path, and in `text/` the extracted
+text once more under a hash of the file's content, compressed but not encrypted,
 under `cache_dir` in your user's cache directory (see
 [Profile and paths](#profile-and-paths)). Whoever can read that directory
 can read the text of the documents you searched. On macOS and Linux
@@ -507,7 +525,8 @@ engine whether it works here and why not.
 | A scan or photo you know holds the text is not found | OCR misread it, or the phrase is split over columns. Try one distinctive word, and `--lang` with the document's language. |
 | A PDF with selectable text is not found, or the text shown is garbage | The PDF carries a bad text layer. `--force-ocr` reads every page with OCR as well. |
 | `adapter ... failed on FILE: ... (not cached, the next search reads the file again)`, exit 2 | The engine could not read that file in this run; the reason is in the line. Hits in other files are complete. Fix the cause and search again. |
-| `adapter ... failed on FILE: ...` without that note | The file itself cannot be read (damaged, encrypted). It is skipped until it changes. |
+| `adapter ... failed on FILE: ...` without that note | The file itself cannot be read (damaged, password protected). It is skipped until it changes. |
+| `adapter ... failed on 12 files: ... (first: FILE; --verbose lists them)` | The same failure in several files, shown once. `--verbose` prints a line per file. |
 | `Unknown adapter: "ocrpdf"` | The rga config in use lacks the adapter entries: with plain `rga`, or with `--rga-config-file`, run `rga-ocr setup --apply` (for another config: `rga-ocr --rga-config-file=F setup --apply`). |
 | Tesseract: language files missing | `rga-ocr setup --apply --engine tesseract --lang de,en` fetches them, or point `TESSDATA_PREFIX` at your own. |
 | `winocr` does not work | No OCR language pack is installed. `rga-ocr --engines` prints the `Add-WindowsCapability` command. |
@@ -515,7 +534,7 @@ engine whether it works here and why not.
 | Text is stale after an engine upgrade or a changed tuning variable | Those are not part of the cache key. `rga-ocr --cache-info`, then `rga-ocr --clear-cache CACHE-ID`, or `rga-ocr --refresh QUERY PATH` for one file or folder. |
 | `The database file is locked`, one hit missing | Two cache writes collided in ripgrep-all. Search again; everything else is cached. |
 | `searching for the word "setup"` | The setup command goes first: `rga-ocr setup --engine NAME`. |
-| The first search of a large folder takes minutes | Every scan is read once. The status line shows progress; the second search is fast. `-j N` sets how many files are read at once. |
+| The first search of a large folder takes minutes | Every scan is read once. The status line shows progress; the second search is fast. `-j N` sets how many files are read at once, and `--timings` shows where the time went. |
 
 For anything else see [Reporting bugs](#reporting-bugs).
 
@@ -537,6 +556,16 @@ RapidOCR loads its ONNX models in every process, about a second, which is
 why it is the slowest cold. rga runs adapters in parallel, `-j N` controls
 how many. A folder with thousands of photos takes minutes the first time
 and under a second afterwards.
+
+Two things keep the first search short. Input that is no document (the
+`__MACOSX/._*` entries of a zip made on macOS, Office lock files) ends
+before a parser is loaded, and a file whose bytes were read before, under
+any name or path, comes from the content cache. On a folder of business
+documents with many copies (2500 files and 7 zips, about 3300 adapter
+runs, half of them duplicates, 220 pages for OCR) the first search with
+Vision went from 338 s to 65 s. `--timings` prints the same breakdown for
+your folder: runs, cache hits, skipped input, engine starts and OCR time
+per adapter, and the slowest files.
 
 ## Limits
 

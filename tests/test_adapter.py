@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -221,8 +222,10 @@ def test_paragraphs_ordered_keeps_reading_order_and_splits_at_a_column_jump():
 class FakeOCR:
     """Stands in for adapter.OCR; fails on the pages named in bad."""
     bad = ()
+    made = 0
 
     def __init__(self):
+        FakeOCR.made += 1
         self.calls = 0
 
     def text(self, img):
@@ -302,7 +305,15 @@ def run_main(monkeypatch, tmp_path, mode, data):
     out = []
     monkeypatch.setattr(adapter, "write_out", out.append)
     adapter.main()
-    return out, [l.split("\t")[0] for l in report.read_text(encoding="utf-8").splitlines()]
+    lines = report.read_text(encoding="utf-8").splitlines() if report.exists() else []
+    report.unlink(missing_ok=True)
+    assert lines == [] or lines[-1].startswith("time\t"), lines      # every run ends with its figures
+    return out, [l.split("\t")[0] for l in lines[:-1]]
+
+
+DAMAGED_PDF = b"%PDF-1.4\nthis is not a pdf\n"
+DAMAGED_PNG = b"\x89PNG\r\n\x1a\nnot an image"
+APPLE_DOUBLE = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        " + b"\x00" * 40
 
 
 def test_adapter_reports_engine_failures_as_retry_and_unreadable_files_as_error(tmp_path, monkeypatch, capsys):
@@ -310,10 +321,165 @@ def test_adapter_reports_engine_failures_as_retry_and_unreadable_files_as_error(
     monkeypatch.setattr(adapter, "NOTES", [])
     monkeypatch.setattr(FakeOCR, "bad", (1, 2))
     assert run_main(monkeypatch, tmp_path, "pdf", scan_pdf(tmp_path, 2)) == ([], ["start", "retry", "done"])
-    (tmp_path / "report").unlink()
-    assert run_main(monkeypatch, tmp_path, "pdf", b"this is not a pdf") == ([], ["start", "error", "done"])
-    (tmp_path / "report").unlink()
-    assert run_main(monkeypatch, tmp_path, "image", b"not an image") == ([], ["start", "error", "done"])
+    assert run_main(monkeypatch, tmp_path, "pdf", DAMAGED_PDF) == ([], ["start", "error", "done"])
+    assert run_main(monkeypatch, tmp_path, "image", DAMAGED_PNG) == ([], ["start", "error", "done"])
+    assert run_main(monkeypatch, tmp_path, "office", b"PK\x03\x04 cut off") == ([], ["start", "error", "done"])
+
+
+@pytest.mark.parametrize("mode", ["pdf", "image", "office"])
+def test_input_that_is_no_document_is_skipped_without_an_error(mode, tmp_path, monkeypatch, capsys):
+    """The "._name" entries macOS puts into a zip carry the extension of the
+    file they belong to, so rga hands them to the adapter. Nothing in them
+    could be read, so nothing is reported as failed; the same for a text
+    file under the wrong extension and for an empty one."""
+    monkeypatch.setattr(adapter, "NOTES", [])
+    for data, events in ((APPLE_DOUBLE, ["skipped"]), (b" \n\n", ["skipped"]),
+                         (b"this is no document of any kind\n", ["start", "skipped"])):   # the parser said so
+        assert run_main(monkeypatch, tmp_path, mode, data) == ([], events), data
+    assert capsys.readouterr().err == ""
+
+
+def test_apple_double_is_skipped_before_a_parser_is_loaded():
+    code = ("import sys, io\n"
+            "sys.argv = ['adapter', 'pdf', '__MACOSX/._a.pdf']\n"
+            "sys.stdin = type('S', (), {'buffer': io.BytesIO(%r)})\n"
+            "from rga_ocr import adapter\n"
+            "adapter.main()\n"
+            "print(sorted(m for m in ('PIL', 'pypdfium2', 'rga_ocr.engines', 'hashlib') if m in sys.modules))\n"
+            % APPLE_DOUBLE)
+    p = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+    assert p.stdout.strip() == "[]", p.stdout + p.stderr
+
+
+def test_a_lock_file_is_skipped_and_a_document_named_like_one_is_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(FakeOCR, "bad", ())
+    lock = b"\x04luca" + b" " * 50 + b"\x04l\x00u\x00c\x00a\x00" + b" \x00" * 50
+    assert adapter.not_a_document("pdf", "dir/~$port.pdf", lock)
+    assert not adapter.not_a_document("pdf", "dir/report.pdf", lock)       # the parser decides
+    assert not adapter.not_a_document("pdf", "dir/~$port.pdf", scan_pdf(tmp_path, 1))
+
+
+def test_failures_read_the_same_for_every_file_with_the_same_cause():
+    e = RuntimeError("Failed to load document (PDFium: Incorrect password error).")
+    assert adapter.explain("pdf", b"%PDF-1.7", e).startswith("password protected, not read (")
+    ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 100
+    assert adapter.has_magic("office", ole)
+    assert adapter.explain("office", ole, zipfile.BadZipFile("File is not a zip file")).startswith(
+        "password protected, or an old binary format")
+    assert adapter.explain("image", DAMAGED_PNG, RuntimeError("not a decodable\nimage")) == \
+        "RuntimeError: not a decodable image"
+
+
+# -------------------------------------------------------- content cache
+
+@pytest.fixture
+def text_cache(tmp_path, monkeypatch):
+    d = tmp_path / "text"
+    monkeypatch.setattr(adapter, "TEXT_CACHE", str(d))
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(FakeOCR, "bad", ())
+    monkeypatch.delenv(adapter.ENV_PREFIX + "TEXT_REFRESH", raising=False)
+    monkeypatch.setattr(FakeOCR, "made", 0, raising=False)
+    return d
+
+
+def stored(d):
+    return sorted(f for _d, _s, files in os.walk(d) for f in files)
+
+
+def test_the_same_bytes_are_read_once(text_cache, tmp_path, monkeypatch):
+    """A copy of a file (another name, another folder, a member of a zip)
+    is answered from the content cache: no parser, no engine."""
+    data = scan_pdf(tmp_path, 2)
+    first = run_main(monkeypatch, tmp_path, "pdf", data)
+    assert first == ([("scan 1" + adapter.PAGE_BREAK + "scan 2").encode()], ["start", "done"])
+    assert len(stored(text_cache)) == 1
+    made = FakeOCR.made
+    monkeypatch.setattr(adapter, "MODES", {"pdf": lambda data: 1 / 0})
+    assert run_main(monkeypatch, tmp_path, "pdf", data) == first
+    assert FakeOCR.made == made
+    if os.name == "posix":
+        for d, _s, files in os.walk(text_cache):
+            assert os.stat(d).st_mode & 0o077 == 0, d
+            for f in files:
+                assert os.stat(os.path.join(d, f)).st_mode & 0o077 == 0, f
+
+
+def test_the_content_cache_key_takes_in_the_mode_and_the_settings(text_cache, monkeypatch):
+    data = b"some bytes"
+    key = adapter.text_key("pdf", data)
+    assert key != adapter.text_key("image", data) and key != adapter.text_key("pdf", data + b"!")
+    for name in ("ENGINE", "LANG", "NO_OCR", "FORCE_OCR"):
+        with monkeypatch.context() as m:
+            m.setenv(adapter.ENV_PREFIX + name, "1")
+            assert adapter.text_key("pdf", data) != key, name
+    for name in ("ADAPTER_VERSION", "MIN_TEXT_CHARS", "RENDER_DPI", "MAX_PIXELS", "PARAGRAPH_GAP",
+                 "MAX_FRAMES", "MAX_OFFICE_MB", "MAX_PICTURES"):
+        with monkeypatch.context() as m:
+            m.setattr(adapter, name, 7)
+            assert adapter.text_key("pdf", data) != key, name
+    assert adapter.text_key("pdf", data) == key
+
+
+def test_only_complete_results_enter_the_content_cache(text_cache, tmp_path, monkeypatch):
+    data = scan_pdf(tmp_path, 2)
+    monkeypatch.setattr(FakeOCR, "bad", (1,))                        # partial
+    assert run_main(monkeypatch, tmp_path, "pdf", data)[1] == ["start", "partial", "done"]
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(FakeOCR, "bad", (1, 2))                      # the engine is down
+    assert run_main(monkeypatch, tmp_path, "pdf", data)[1] == ["start", "retry", "done"]
+    assert run_main(monkeypatch, tmp_path, "pdf", DAMAGED_PDF)[1] == ["start", "error", "done"]
+    assert stored(text_cache) == []
+    monkeypatch.setattr(FakeOCR, "bad", ())
+    assert run_main(monkeypatch, tmp_path, "pdf", data)[1] == ["start", "done"]
+    assert len(stored(text_cache)) == 1
+
+
+def test_refresh_writes_the_content_cache_and_does_not_read_it(text_cache, tmp_path, monkeypatch):
+    data = scan_pdf(tmp_path, 1)
+    run_main(monkeypatch, tmp_path, "pdf", data)
+    monkeypatch.setenv(adapter.ENV_PREFIX + "TEXT_REFRESH", "1")
+    monkeypatch.setattr(adapter, "MODES", {"pdf": lambda data: "read again"})
+    assert run_main(monkeypatch, tmp_path, "pdf", data)[0] == [b"read again"]
+    monkeypatch.delenv(adapter.ENV_PREFIX + "TEXT_REFRESH")
+    monkeypatch.setattr(adapter, "MODES", {"pdf": lambda data: 1 / 0})
+    assert run_main(monkeypatch, tmp_path, "pdf", data)[0] == [b"read again"]
+
+
+def test_a_damaged_content_cache_file_is_no_hit(text_cache, tmp_path, monkeypatch):
+    data = scan_pdf(tmp_path, 1)
+    run_main(monkeypatch, tmp_path, "pdf", data)
+    key = adapter.text_key("pdf", data)
+    with open(os.path.join(text_cache, key[:2], key), "wb") as f:
+        f.write(b"cut off")
+    assert run_main(monkeypatch, tmp_path, "pdf", data) == ([b"scan 1"], ["start", "done"])
+    assert adapter.text_get(key) == b"scan 1"
+
+
+def test_without_the_variable_nothing_is_stored(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapter, "TEXT_CACHE", "")
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(adapter, "OCR", FakeOCR)
+    monkeypatch.setattr(FakeOCR, "bad", ())
+    monkeypatch.chdir(tmp_path)
+    assert run_main(monkeypatch, tmp_path, "pdf", scan_pdf(tmp_path, 1))[1] == ["start", "done"]
+    assert stored(tmp_path) == ["scan.pdf"]
+
+
+def test_the_time_line_carries_the_figures_of_the_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapter, "NOTES", [])
+    monkeypatch.setattr(adapter, "TEXT_CACHE", "")
+    monkeypatch.setattr(adapter, "REPORT", str(tmp_path / "report"))
+    monkeypatch.setattr(adapter, "STATS", {"starts": 1, "init": 0.5, "pages": 3, "ocr": 1.25})
+    adapter.report_time("pdf", "/x/file", "read")
+    ev, mode, path, detail = (tmp_path / "report").read_text(encoding="utf-8").rstrip("\n").split("\t")
+    f = dict(x.split("=") for x in detail.split(";"))
+    assert (ev, mode, path) == ("time", "pdf", "/x/file")
+    assert float(f.pop("t0")) <= float(f.pop("t1"))
+    assert f == {"what": "read", "starts": "1", "init": "0.500", "pages": "3", "ocr": "1.250"}
 
 
 def test_adapter_reports_a_partial_result(tmp_path, monkeypatch, capsys):
@@ -321,7 +487,7 @@ def test_adapter_reports_a_partial_result(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(adapter, "NOTES", [])
     monkeypatch.setattr(FakeOCR, "bad", (1,))
     out, events = run_main(monkeypatch, tmp_path, "pdf", scan_pdf(tmp_path, 2))
-    assert out == [adapter.PAGE_BREAK + "scan 2"]
+    assert out == [(adapter.PAGE_BREAK + "scan 2").encode()]
     assert events == ["start", "partial", "done"]
 
 

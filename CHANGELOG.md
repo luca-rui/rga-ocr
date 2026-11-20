@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A content cache next to rga's: the text of a file is stored under the
+  SHA-256 of its bytes, the adapter, its version and the settings that
+  change the text. The same file under another name, in another folder
+  or inside a zip is not read again, and a moved or renamed folder costs
+  no OCR. It lives in `text/` inside each cache directory, follows
+  `--no-cache`, `--refresh` and `--clear-cache`, and holds only complete
+  results.
+- `--timings` prints after the search where the time of the content pass
+  went: wall time, the summed time of the adapters, how many ran at once,
+  a table per adapter and the slowest files.
+- `--verbose` lists every file an adapter failed on or skipped.
+
+### Changed
+
+- Input that carries a document's extension and is no document produces
+  no message any more: the `__MACOSX/._*` entries macOS puts into zips,
+  the `~$` lock files of Office, empty files, a web page saved as `.pdf`.
+  The first two are recognised before a parser is loaded. The summary
+  counts them as "skipped" and `--verbose` names them.
+- Files with the same failure share one line with the count and the first
+  file, where every file had its own line before. `--verbose` prints them
+  all. The exit status is unchanged.
+- A PDF that needs a password says so (`password protected, not read`),
+  and so does an Office file that is encrypted or an old binary format
+  under a new extension, in place of the parser's error alone.
+
 ## [0.2.5] - 2026-11-20
 
 ### Added

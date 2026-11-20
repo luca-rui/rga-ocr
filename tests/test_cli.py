@@ -568,3 +568,67 @@ def test_display_path_with_several_roots(tmp_path):
     assert cli.display_path(inner, [a, b]) == os.path.join(b, "scan.pdf")
     assert cli.display_path(os.path.join(a, ".", "x.png"), [a, b]) == os.path.join(a, "x.png")
     assert cli.display_path("inner/scan.png", [a, b]) == "inner/scan.png"   # a member of an archive
+
+
+# ------------------------------------------------- what the adapters report
+
+def test_one_failure_is_one_line_and_many_of_one_kind_are_one_line_too():
+    ev = [["start", "pdf", "/r/./a.pdf", ""],
+          ["error", "pdf", "/r/./a.pdf", "password protected"],
+          ["error", "pdf", "/r/./b.pdf", "password protected"],
+          ["error", "pdf", "/r/./c.pdf", "PdfiumError: Data format error"],
+          ["retry", "image", "/r/./x.png", "OSError: model fetch failed"],
+          ["retry", "image", "in/zip.jpg", "OSError: model fetch failed"],
+          ["partial", "office", "/r/./d.pptx", "2 of 9 pictures could not be read"],
+          ["skipped", "pdf", "__MACOSX/._a.pdf", "macOS metadata (AppleDouble), not a document"],
+          ["time", "pdf", "/r/./a.pdf", "t0=1;t1=2"]]
+    lines, failed = cli.adapter_messages(ev, "/r")
+    assert lines == [
+        "adapter pdf failed on 2 files: password protected (first: a.pdf; --verbose lists them)",
+        "adapter pdf failed on c.pdf: PdfiumError: Data format error",
+        "adapter image failed on 2 files: OSError: model fetch failed (first: x.png; --verbose lists them;"
+        " not cached, the next search reads the files again)",
+        "adapter office, d.pptx: 2 of 9 pictures could not be read"]
+    # grouping is for the eye only: every file the engine failed on is forgotten
+    assert failed == ["/r/./x.png", "in/zip.jpg"]
+    lines, failed = cli.adapter_messages(ev, "/r", verbose=True)
+    assert lines == [
+        "adapter pdf failed on a.pdf: password protected",
+        "adapter pdf failed on b.pdf: password protected",
+        "adapter pdf failed on c.pdf: PdfiumError: Data format error",
+        "adapter image failed on x.png: OSError: model fetch failed (not cached, the next search reads the file again)",
+        "adapter image failed on in/zip.jpg: OSError: model fetch failed"
+        " (not cached, the next search reads the file again)",
+        "adapter office, d.pptx: 2 of 9 pictures could not be read",
+        "skipped __MACOSX/._a.pdf: macOS metadata (AppleDouble), not a document"]
+    assert failed == ["/r/./x.png", "in/zip.jpg"]
+
+
+def test_skipped_input_alone_says_nothing():
+    ev = [["skipped", "pdf", "__MACOSX/._a.pdf", "macOS metadata (AppleDouble), not a document"]] * 500
+    assert cli.adapter_messages(ev, "/r") == ([], [])
+
+
+def test_timings_report():
+    def t(mode, path, t0, t1, what="read", starts=0, init=0, pages=0, ocr=0):
+        return ["time", mode, path, f"t0={t0};t1={t1};what={what};starts={starts};init={init};pages={pages};ocr={ocr}"]
+    ev = [t("pdf", "/r/./a.pdf", 100.0, 102.0, starts=1, init=0.5, pages=2, ocr=1.2),
+          t("pdf", "/r/./b.pdf", 101.0, 103.0, what="hit"),
+          t("pdf", "in/zip.pdf", 105.0, 106.0, what="skipped"),
+          ["done", "pdf", "/r/./a.pdf", ""], ["time", "pdf", "x", "garbage"]]
+    lines = cli.timing_lines(ev, 10.0, 100.0, 110.0, "/r")
+    assert lines[0] == ("timings: wall 10.0 s, 3 adapter runs with 5.0 s in sum (0.5 at once on average, "
+                        "2 at most), 6.0 s with no adapter running")
+    rows = [l.split() for l in lines[1:4]]
+    assert rows[0][:2] == ["ADAPTER", "WHERE"]
+    assert rows[1] == ["pdf", "in", "archives", "1", "1.0", "0", "1", "0", "0.0", "0", "0.0"]
+    assert rows[2] == ["pdf", "on", "disk", "2", "4.0", "1", "0", "1", "0.5", "2", "1.2"]
+    assert lines[4] == "  slowest: 2.0 s  a.pdf"
+    assert "reported no times" in cli.timing_lines([["done", "pdf", "/r/./a.pdf", ""]], 1.0, 0, 1, "/r")[0]
+
+
+def test_verbose_and_timings_are_flags_of_their_own():
+    o = cli.parse_args(["--verbose", "--timings", "q"])
+    assert o["verbose"] and o["timings"] and o["pass"] == []
+    o = cli.parse_args(["q"])
+    assert not o["verbose"] and not o["timings"]

@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import sys
 
-from rga_ocr import PROG, engines, paths
+from rga_ocr import ADAPTER_VERSION, PROG, engines, paths
 
 RGA_RELEASES = "https://github.com/phiresky/ripgrep-all/releases/download"
 
@@ -495,10 +495,10 @@ def adapter_entries(binary=None, args=None):
                 "output_path_hint": "${input_virtual_path}" + hint}
     return [
         entry("ocrpdf", "pdf", "PDF text layer via pypdfium2, OCR for pages without one",
-              ["pdf"], ["application/pdf"], ".txt.asciipagebreaks", version=3),
-        entry("ocrimg", "image", "OCR for photos and scans", IMAGE_EXT, IMAGE_MIME, ".txt", version=3),
+              ["pdf"], ["application/pdf"], ".txt.asciipagebreaks", version=ADAPTER_VERSION),
+        entry("ocrimg", "image", "OCR for photos and scans", IMAGE_EXT, IMAGE_MIME, ".txt", version=ADAPTER_VERSION),
         entry("officexml", "office", "xlsx, pptx, ods, odp text and the pictures on slides (docx and odt go to pandoc)",
-              OFFICE_EXT, OFFICE_MIME, ".txt.asciipagebreaks", version=3),
+              OFFICE_EXT, OFFICE_MIME, ".txt.asciipagebreaks", version=ADAPTER_VERSION),
     ]
 
 
