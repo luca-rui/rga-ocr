@@ -154,6 +154,9 @@ usage: {PROG} [options] QUERY [PATH ...]    PATH defaults to .
   --json                 rg JSON events; name hits first as {{"type":"name","path":...}}
   --color WHEN           auto | always | never (default auto: colour on a terminal)
   --no-cache             do not read or write the OCR cache
+  --verbose              list every file an adapter failed on (the default groups files
+                         with the same failure into one line) and every skipped file
+  --timings              after the search: where the time of the adapters went
   --refresh              read the files below PATH again and store the new text
   --progress / --no-progress   status line while searching and a summary after (default on)
   --init-config          write a commented profile to {{config path}} and exit
@@ -233,7 +236,7 @@ def settings_from(profile_path):
 # {ENV_PREFIX}<NAME> variables that are not profile keys: the profile path
 # and what the CLI hands to the adapter or the adapter reads on its own.
 # tests/test_cli.py checks this list against the source.
-INTERNAL_ENV = ("CONFIG", "FORCE_OCR", "NO_OCR", "REPORT",
+INTERNAL_ENV = ("CONFIG", "FORCE_OCR", "NO_OCR", "REPORT", "TEXT_CACHE", "TEXT_REFRESH",
                 "MIN_TEXT_CHARS", "RENDER_DPI", "MAX_PIXELS", "PARAGRAPH_GAP",
                 "MAX_FRAMES", "MAX_OFFICE_MB", "MAX_PICTURES")
 
@@ -596,7 +599,7 @@ def parse_args(argv):
         "accurate": False, "no_exclude": False, "names": True, "contents": True, "json": False,
         "no_cache": False, "init": False, "clear_cache": False, "cache_info": False, "engines": False,
         "dry_run": False, "refresh": False, "config": None, "query": None, "root": ".", "roots": ["."], "replace": False,
-        "color": "auto", "adapters": None,
+        "color": "auto", "adapters": None, "verbose": False, "timings": False,
     }
     args = list(argv)
     pos = []
@@ -659,6 +662,10 @@ def parse_args(argv):
             o["no_cache"] = True
         elif a == "--refresh":
             o["refresh"] = True
+        elif a == "--verbose":
+            o["verbose"] = True
+        elif a == "--timings":
+            o["timings"] = True
         elif name == "--rga-cache-path":
             # the search sets this flag itself, and rga takes it only once:
             # the directory stands in for cache_dir, with a directory per
@@ -812,7 +819,8 @@ def render_match(line, submatches, width):
 
 class Report:
     """Tails the adapter report file (<ENV_PREFIX>REPORT): lines of the form
-    EVENT\\tMODE\\tPATH\\tDETAIL, EVENT one of start, done, error."""
+    EVENT\\tMODE\\tPATH\\tDETAIL, EVENT one of start, done, skipped, error,
+    retry, partial, time."""
 
     def __init__(self, path):
         self.path = path
@@ -901,6 +909,7 @@ class Status:
         self.lock = threading.Lock()
         self.hits = 0
         self.done = 0
+        self.skipped = 0
         self.current = ""
         self.t0 = time.monotonic()
         self.frame = 0
@@ -928,6 +937,8 @@ class Status:
                 self.current = display_path(path, self.root)
             elif ev == "done":
                 self.done += 1
+            elif ev == "skipped":
+                self.skipped += 1
 
     def hit(self):
         with self.lock:
@@ -944,8 +955,13 @@ class Status:
             self.shown = False
 
     def _counts(self):
-        return [f"{self.hits} hit" + ("" if self.hits == 1 else "s"),
-                f"{self.done} file" + ("" if self.done == 1 else "s") + " " + self.verb]
+        counts = [f"{self.hits} hit" + ("" if self.hits == 1 else "s"),
+                  f"{self.done} file" + ("" if self.done == 1 else "s") + " " + self.verb]
+        if self.skipped:
+            # input that was no document (macOS metadata in a zip, a lock
+            # file); --verbose lists it
+            counts.append(f"{self.skipped} skipped")
+        return counts
 
     def _draw(self):
         cols = shutil.get_terminal_size((80, 24)).columns
@@ -1083,6 +1099,102 @@ def _config_unread(why):
     warn(f"cannot read {paths.rga_config_path()} ({why}); searching with it as it is, "
          f"without this installation's adapter entries")
     return None
+
+
+def adapter_messages(events, root, verbose=False):
+    """What the adapters reported, as (lines for stderr, paths the engine
+    failed on).
+
+    A message stands for a document that could not be read, in full or in
+    part. Files with the same failure share one line (the count and the
+    first file) unless verbose is set: one engine that is down, or one
+    password on a folder of statements, would otherwise fill the screen.
+    Input that was no document at all ("skipped") is shown with verbose
+    only."""
+    groups, failed, skipped = {}, [], []
+    for ev, mode, path, detail in events:
+        if ev in ("error", "retry", "partial"):
+            groups.setdefault((ev, mode, detail), []).append(path)
+            if ev == "retry":
+                failed.append(path)
+        elif ev == "skipped":
+            skipped.append((path, detail))
+    lines = []
+    for (ev, mode, detail), files in groups.items():
+        again = " (not cached, the next search reads the file again)" if ev == "retry" else ""
+        if verbose or len(files) == 1:
+            for path in files:
+                shown = display_path(path, root)
+                lines.append(f"adapter {mode}, {shown}: {detail}" if ev == "partial"
+                             else f"adapter {mode} failed on {shown}: {detail}{again}")
+            continue
+        n, first = len(files), display_path(files[0], root)
+        if ev == "partial":
+            lines.append(f"adapter {mode}, {n} files: {detail} (first: {first}; --verbose lists them)")
+        else:
+            more = "; not cached, the next search reads the files again" if ev == "retry" else ""
+            lines.append(f"adapter {mode} failed on {n} files: {detail} "
+                         f"(first: {first}; --verbose lists them{more})")
+    if verbose:
+        lines += [f"skipped {display_path(path, root)}: {detail}" for path, detail in skipped]
+    return lines, failed
+
+
+def timing_lines(events, wall, t_start, t_end, root):
+    """The --timings report from the adapters' "time" lines: one run of an
+    adapter is one file (or one member of an archive)."""
+    runs = []
+    for ev, mode, path, detail in events:
+        if ev != "time":
+            continue
+        f = dict(x.split("=", 1) for x in detail.split(";") if "=" in x)
+        try:
+            runs.append({"mode": mode, "path": path, "t0": float(f["t0"]), "t1": float(f["t1"]),
+                         "what": f.get("what", "read"), "starts": int(f.get("starts", 0)),
+                         "init": float(f.get("init", 0)), "pages": int(f.get("pages", 0)),
+                         "ocr": float(f.get("ocr", 0))})
+        except (KeyError, ValueError):
+            continue
+    if not runs:
+        return ["timings: the adapters reported no times (the rga config runs an adapter "
+                f"older than {PROG} {VERSION}; `{PROG} setup --apply` points it at this one)"]
+    total = sum(r["t1"] - r["t0"] for r in runs)
+    # sweep over the starts and ends: the most adapters at once, and the
+    # time in which none was running
+    points = sorted([(max(r["t0"], t_start), 1) for r in runs] + [(min(r["t1"], t_end), -1) for r in runs],
+                    key=lambda p: (p[0], p[1]))
+    live, peak, busy, last = 0, 0, 0.0, t_start
+    for t, step in points:
+        if live > 0:
+            busy += max(0.0, t - last)
+        last = t
+        live += step
+        peak = max(peak, live)
+    lines = [f"timings: wall {wall:.1f} s, {len(runs)} adapter runs with {total:.1f} s in sum "
+             f"({total / wall if wall > 0 else 0:.1f} at once on average, {peak} at most), "
+             f"{max(0.0, wall - busy):.1f} s with no adapter running"]
+    rows = {}
+    for r in runs:
+        where = "on disk" if os.path.isabs(r["path"]) else "in archives"
+        g = rows.setdefault((r["mode"], where), {"n": 0, "s": 0.0, "hit": 0, "skipped": 0, "starts": 0,
+                                                 "init": 0.0, "pages": 0, "ocr": 0.0})
+        g["n"] += 1
+        g["s"] += r["t1"] - r["t0"]
+        if r["what"] in ("hit", "skipped"):
+            g[r["what"]] += 1
+        for k in ("starts", "init", "pages", "ocr"):
+            g[k] += r[k]
+    table = [[mode, where, g["n"], f"{g['s']:.1f}", g["hit"], g["skipped"], g["starts"], f"{g['init']:.1f}",
+              g["pages"], f"{g['ocr']:.1f}"] for (mode, where), g in sorted(rows.items())]
+    header = ["ADAPTER", "WHERE", "RUNS", "SECONDS", "CACHE HITS", "SKIPPED", "ENGINE STARTS", "START S",
+              "OCR IMAGES", "OCR S"]
+    widths = [max(len(str(r[i])) for r in [header] + table) for i in range(len(header))]
+    for r in [header] + table:
+        lines.append("  " + "  ".join(str(c).ljust(widths[i]) if i < 2 else str(c).rjust(widths[i])
+                                      for i, c in enumerate(r)).rstrip())
+    for r in sorted(runs, key=lambda r: r["t0"] - r["t1"])[:5]:
+        lines.append(f"  slowest: {r['t1'] - r['t0']:.1f} s  {display_path(r['path'], root)}")
+    return lines
 
 
 ARCHIVE_ADAPTERS = ("zip", "tar", "decompress")       # rga's own; a row holds all members
@@ -1263,6 +1375,15 @@ def run_contents(o, st, printer, root, query):
                 env[ENV_PREFIX + name] = "1"
             else:
                 env.pop(ENV_PREFIX + name, None)
+        # the content cache sits next to rga's database, in the directory of
+        # this engine and language setting; --no-cache leaves it out, and
+        # --refresh writes it without reading
+        env.pop(ENV_PREFIX + "TEXT_CACHE", None)
+        env.pop(ENV_PREFIX + "TEXT_REFRESH", None)
+        if not o["no_cache"]:
+            env[ENV_PREFIX + "TEXT_CACHE"] = os.path.join(cache, "text")
+            if o["refresh"]:
+                env[ENV_PREFIX + "TEXT_REFRESH"] = "1"
         # rg discards a preprocessor's stderr when it exits 0, so the adapters
         # report progress and errors through a file instead
         report_path = os.path.join(run_dir, "report")
@@ -1281,6 +1402,7 @@ def run_contents(o, st, printer, root, query):
             for raw in pipe:
                 errbuf.append(raw)
 
+        t_start, m_start = time.time(), time.monotonic()
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, **OWN_GROUP)
         except OSError as e:
@@ -1321,6 +1443,7 @@ def run_contents(o, st, printer, root, query):
             sys.stdout.flush()
             status = proc.wait()
             reader.join()
+            wall, t_end = time.monotonic() - m_start, time.time()
         finally:
             # left early (the reader of the output went away, a signal, an
             # error): rga, rg and the adapters must not go on with the OCR
@@ -1332,16 +1455,14 @@ def run_contents(o, st, printer, root, query):
         if err:
             sys.stderr.buffer.write(err)
             sys.stderr.flush()
-        failed = []
-        for ev, mode, path, detail in Report(report_path).events():
-            if ev == "error":
-                warn(f"adapter {mode} failed on {display_path(path, root)}: {detail}")
-            elif ev == "retry":
-                warn(f"adapter {mode} failed on {display_path(path, root)}: {detail}"
-                     f" (not cached, the next search reads the file again)")
-                failed.append(path)
-            elif ev == "partial":
-                warn(f"adapter {mode}, {display_path(path, root)}: {detail}")
+        events = Report(report_path).events()
+        lines, failed = adapter_messages(events, root, o["verbose"])
+        for line in lines:
+            warn(line)
+        if o["timings"]:
+            for line in timing_lines(events, wall, t_start, t_end, root):
+                sys.stderr.write(line + "\n")
+            sys.stderr.flush()
         forget_failed(held, failed, root)
         # rga reports its own failures (config, cache, adapter spawn) with exit 1, like "no match"
         if status == 1 and re.search(rb"(?im)^error", err):

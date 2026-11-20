@@ -30,7 +30,16 @@ Environment (set by rga-ocr from the profile, flags, or directly):
                           file cannot be read), retry (the OCR engine failed;
                           rga-ocr drops the file from the cache so that it is
                           read again) or partial (some PDF pages or pictures
-                          on slides could not be OCR'd; the rest stays cached)
+                          on slides could not be OCR'd; the rest stays cached),
+                          one "skipped" line in place of start and done for
+                          input that is no document of the adapter's type,
+                          and a last "time" line with the run's figures
+  RGA_OCR_TEXT_CACHE      directory of the content cache: the text of an input
+                          is stored under the SHA-256 of its bytes and of the
+                          settings, and a second input with the same bytes
+                          (a copy, a renamed file, a member of an archive)
+                          is answered from there without parsing or OCR
+  RGA_OCR_TEXT_REFRESH    "1": the content cache is written but not read
 
 Rules: never open the virtual path (archive members do not exist on disk),
 never exit non-zero (rg would abort with exit 2), never emit NUL bytes.
@@ -43,9 +52,12 @@ import io
 import os
 import re
 import sys
+import time
 import zipfile
 
-from rga_ocr import ENV_PREFIX, PROG
+T0 = time.time()        # as near to the start of the process as the adapter gets
+
+from rga_ocr import ADAPTER_VERSION, ENV_PREFIX, PROG  # noqa: E402
 
 TAG = PROG + " adapter"
 
@@ -84,9 +96,12 @@ def clean(text):
     return text.strip()
 
 
+def encode_out(text):
+    return text.replace("\x00", "").encode("utf-8", "replace")
+
+
 def write_out(text):
-    text = text.replace("\x00", "")
-    sys.stdout.buffer.write(text.encode("utf-8", "replace"))
+    sys.stdout.buffer.write(text if isinstance(text, bytes) else encode_out(text))
     sys.stdout.buffer.flush()
 
 
@@ -170,21 +185,29 @@ class OCR:
     """The configured engine plus paragraph grouping of its lines."""
 
     def __init__(self):
-        from rga_ocr import engines
+        t = time.monotonic()
+        STATS["starts"] += 1
         try:
+            from rga_ocr import engines
             langs = engines.parse_langs(os.environ.get(ENV_PREFIX + "LANG"))
             name = os.environ.get(ENV_PREFIX + "ENGINE", "").strip() or "auto"
             self.engine = engines.resolve(name, langs)(langs)
         except Exception as e:  # noqa: BLE001
             raise EngineFailure(e) from e
+        finally:
+            STATS["init"] += time.monotonic() - t
 
     def text(self, img):
         if min(img.size) < MIN_SIDE:
             return ""
+        t = time.monotonic()
+        STATS["pages"] += 1
         try:
             lines = self.engine.recognize(img)
         except Exception as e:  # noqa: BLE001
             raise EngineFailure(e) from e
+        finally:
+            STATS["ocr"] += time.monotonic() - t
         return paragraphs(lines)
 
     def text_of_bytes(self, data):
@@ -499,11 +522,15 @@ MODES = {"pdf": mode_pdf, "image": mode_image, "office": mode_office}
 
 REPORT = os.environ.get(ENV_PREFIX + "REPORT", "")
 NOTES = []      # problems that left part of a file unread; reported as "partial"
+# figures of this run for the "time" line: engine starts and their seconds,
+# images handed to the engine and the seconds spent on them
+STATS = {"starts": 0, "init": 0.0, "pages": 0, "ocr": 0.0}
 
 
 def report(event, mode, path, detail=""):
     """Append one line to the report file in a single O_APPEND write, so the
-    lines of parallel adapters do not interleave (short writes stay atomic)."""
+    lines of parallel adapters do not interleave (short writes stay atomic;
+    on Windows a lock stands in for that)."""
     if not REPORT:
         return
     try:
@@ -511,11 +538,160 @@ def report(event, mode, path, detail=""):
         fd = os.open(REPORT, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
         try:
             line = f"{event}\t{mode}\t{path}\t{detail}\n".replace("\r", " ")
-            os.write(fd, line.encode("utf-8", "replace")[:4000])
+            held = _report_lock(fd)
+            try:
+                os.write(fd, line.encode("utf-8", "replace")[:4000])
+            finally:
+                _report_unlock(fd, held)
         finally:
             os.close(fd)
     except OSError:
         pass
+
+
+# Windows has no atomic append: O_APPEND there is a seek and a write, and two
+# adapters that end at the same moment (two copies of one file do) write over
+# each other's line. One byte far behind anything the file will hold is locked
+# for the write; the reader of the file never gets there.
+_LOCK_AT = 1 << 30
+
+
+def _report_lock(fd):
+    if sys.platform != "win32":
+        return False
+    try:
+        import msvcrt
+        os.lseek(fd, _LOCK_AT, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)      # waits, up to ten seconds
+        return True
+    except (ImportError, OSError):
+        return False                                # write without it, as before
+
+
+def _report_unlock(fd, held):
+    if not held:
+        return
+    try:
+        import msvcrt
+        os.lseek(fd, _LOCK_AT, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except (ImportError, OSError):
+        pass
+
+
+def report_time(mode, path, what):
+    """The last line of a run: when the process started and ended, and what
+    the time went into. what: read, hit (content cache) or skipped."""
+    report("time", mode, path,
+           f"t0={T0:.3f};t1={time.time():.3f};what={what};starts={STATS['starts']};"
+           f"init={STATS['init']:.3f};pages={STATS['pages']};ocr={STATS['ocr']:.3f}")
+
+
+# ------------------------------------------------------- not a document
+
+# AppleDouble (the "._name" files macOS puts next to a file on foreign file
+# systems and into every zip, below __MACOSX/) and AppleSingle
+_APPLE_DOUBLE = (b"\x00\x05\x16\x07", b"\x00\x05\x16\x00")
+_OLE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"BM",
+                b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
+
+
+def has_magic(mode, data):
+    """True when data begins the way a file of the adapter's type does. Only
+    used to tell a damaged document from input that never was one; a file
+    without the mark is still handed to the parser first."""
+    if mode == "pdf":
+        return b"%PDF-" in data[:1024]              # PDFium looks that far
+    if mode == "office":
+        return data[:2] == b"PK" or data[:8] == _OLE
+    if mode == "image":
+        return (data.startswith(_IMAGE_MAGIC) or is_heif(data) or data[4:8] == b"ftyp"
+                or (data[:4] == b"RIFF" and data[8:12] == b"WEBP"))
+    return True
+
+
+def not_a_document(mode, path, data):
+    """Why data is certainly no document, or "": checked before any parser
+    is imported, so the hundreds of "._" entries of a zip made on a Mac cost
+    an interpreter start each and nothing more."""
+    if data[:4] in _APPLE_DOUBLE:
+        return "macOS metadata (AppleDouble), not a document"
+    if not data.strip():
+        return "empty file"
+    name = re.split(r"[/\\]", path)[-1]
+    if name.startswith("~$") and not has_magic(mode, data):
+        return "lock file of an office program, not a document"
+    return ""
+
+
+_KIND = {"pdf": "a PDF", "image": "an image", "office": "an office file"}
+
+
+def explain(mode, data, e):
+    """One line for a file the parser gave up on, worded so that the same
+    cause reads the same for every file: the CLI groups by this text."""
+    msg = f"{e.__class__.__name__}: {e}".replace("\n", " ")
+    if mode == "pdf" and "password" in msg.lower():
+        return "password protected, not read (" + msg + ")"
+    if mode == "office" and data[:8] == _OLE:
+        return ("password protected, or an old binary format under a new extension, "
+                "not read (" + msg + ")")
+    return msg
+
+
+# -------------------------------------------------------- content cache
+
+TEXT_CACHE = os.environ.get(ENV_PREFIX + "TEXT_CACHE", "")
+
+
+def text_key(mode, data):
+    """SHA-256 of everything the output text depends on: the bytes, the mode,
+    the adapter version, the engine and its languages, and the settings."""
+    import hashlib
+    env = [os.environ.get(ENV_PREFIX + k, "") for k in ("ENGINE", "LANG", "NO_OCR", "FORCE_OCR")]
+    settings = [mode, ADAPTER_VERSION, *env, MIN_TEXT_CHARS, RENDER_DPI, MAX_PIXELS,
+                PARAGRAPH_GAP, MAX_FRAMES, MAX_OFFICE_MB, MAX_PICTURES]
+    h = hashlib.sha256("\x00".join(str(x) for x in settings).encode("utf-8", "replace"))
+    h.update(b"\x00")
+    h.update(data)
+    return h.hexdigest()
+
+
+def text_get(key):
+    """The stored output for key as bytes, or None. A file that cannot be
+    read or unpacked (cut off, damaged) is no hit."""
+    if not TEXT_CACHE or os.environ.get(ENV_PREFIX + "TEXT_REFRESH") == "1":
+        return None
+    import zlib
+    try:
+        with open(os.path.join(TEXT_CACHE, key[:2], key), "rb") as f:
+            return zlib.decompress(f.read())
+    except (OSError, zlib.error):
+        return None
+
+
+def text_put(key, out):
+    """Store out (bytes) for key: written next to its place and renamed, so a
+    reader never sees half a file; for this user only, like rga's cache. A
+    failure costs the next run the work and nothing else."""
+    if not TEXT_CACHE:
+        return
+    import zlib
+    d = os.path.join(TEXT_CACHE, key[:2])
+    tmp = os.path.join(d, f"{key}.{os.getpid()}.tmp")
+    try:
+        for new in (TEXT_CACHE, d):         # makedirs gives its mode to the last one only
+            os.makedirs(new, mode=0o700, exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(zlib.compress(out, 1))
+        os.replace(tmp, os.path.join(d, key))
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def main():
@@ -533,22 +709,46 @@ def main():
     data = sys.stdin.buffer.read()
     if not data:
         return
+    why = not_a_document(mode, path, data)
+    if why:
+        report("skipped", mode, path, why)
+        report_time(mode, path, "skipped")
+        return
+    key = text_key(mode, data) if TEXT_CACHE else ""
+    hit = text_get(key) if key else None
     report("start", mode, path)
+    if hit is not None:
+        write_out(hit)
+        report("done", mode, path)
+        report_time(mode, path, "hit")
+        return
     try:
-        write_out(fn(data))
+        out = encode_out(fn(data))
+        write_out(out)
         for note in NOTES:
             sys.stderr.write(f"{TAG}[{mode}]: {note}\n")
             report("partial", mode, path, note)
+        if key and not NOTES:
+            # only what was read in full: a partial result, a failure of the
+            # engine or of the file must not answer for other copies
+            text_put(key, out)
     except EngineFailure as e:
         if e.text:
             write_out(e.text)
         sys.stderr.write(f"{TAG}[{mode}]: {e}\n")
         report("retry", mode, path, str(e))
     except Exception as e:  # noqa: BLE001
-        msg = f"{e.__class__.__name__}: {e}".replace("\n", " ")
+        if not has_magic(mode, data):
+            # never was a document of this type (a download page saved as
+            # .pdf, a text file named .jpg): nothing to tell the user about
+            report("skipped", mode, path, f"not {_KIND[mode]}")
+            report_time(mode, path, "skipped")
+            return
+        msg = explain(mode, data, e)
         sys.stderr.write(f"{TAG}[{mode}]: {msg}\n")
         report("error", mode, path, msg)
     report("done", mode, path)
+    report_time(mode, path, "read")
 
 
 if __name__ == "__main__":

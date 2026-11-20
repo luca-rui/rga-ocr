@@ -459,7 +459,7 @@ def broken_dir(tool):
     if not os.path.isdir(d):
         os.makedirs(d)
         with open(os.path.join(d, "broken.pdf"), "w") as f:
-            f.write("this is not a pdf\n")
+            f.write("%PDF-1.4\nthis is not a pdf\n")
         with open(os.path.join(d, "a.txt"), "w") as f:
             f.write("needle here\n")
     return d
@@ -470,6 +470,90 @@ def test_adapter_error_forwarded(tool):
     assert r.code == 0, (r.out, r.err)
     assert grep(r.err, "^" + re.escape(P) + r": adapter pdf failed on broken\.pdf: "), r.err
     assert grep(r.out, r"a\.txt:1:needle here"), r.out
+
+
+def junk_tool(tool, tmp_path):
+    """A tree of its own: one photo, the zip a Mac makes of it (with the
+    "._" entry below __MACOSX), a lock file and a text file named .pdf."""
+    import zipfile
+    t = Tool(str(tmp_path / "junk"))
+    os.makedirs(t.fx)
+    shutil.copy(os.path.join(tool.fx, "photo.png"), t.fx)
+    double = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        " + b"\x00" * 40
+    with zipfile.ZipFile(os.path.join(t.fx, "mac.zip"), "w") as z:
+        z.write(os.path.join(tool.fx, "photo.png"), "inner/copy.png")
+        z.writestr("__MACOSX/inner/._copy.png", double)
+        z.writestr("__MACOSX/inner/._report.pdf", double)
+    with open(os.path.join(t.fx, "~$report.pdf"), "wb") as f:
+        f.write(b"\x04luca" + b" " * 50)
+    with open(os.path.join(t.fx, "download.pdf"), "w") as f:
+        f.write("<html>Sign in to download</html>\n")
+    return t
+
+
+def test_input_that_is_no_document_gives_no_message(tool, tmp_path):
+    """Only a document that could not be read is worth a line: the macOS
+    metadata in a zip, a lock file and a web page saved as .pdf are not."""
+    t = junk_tool(tool, tmp_path)
+    r = t.search("--no-cache")
+    assert r.code == 0, (r.out, r.err)
+    assert grep(r.out, r"photo\.png") and grep(r.out, r"mac\.zip:[0-9]+:inner/copy\.png: "), r.out
+    assert clean_err(r), r.err
+    r = t.search("--no-cache", "--verbose")
+    assert r.code == 0, (r.out, r.err)
+    for name, why in ((r"__MACOSX/inner/\._copy\.png", "macOS metadata"),
+                      (r"__MACOSX/inner/\._report\.pdf", "macOS metadata"),
+                      (r"~\$report\.pdf", "lock file of an office program"),
+                      (r"download\.pdf", "not a PDF")):
+        assert grep(r.err, "^" + re.escape(P) + ": skipped " + name + ": " + why), (name, r.err)
+    assert not grep(r.err, "failed on"), r.err
+
+
+@pty_only
+def test_summary_counts_what_was_skipped(tool, tmp_path):
+    t = junk_tool(tool, tmp_path)
+    code, raw = t.run_pty("--no-cache", NEEDLE, ".")
+    assert code == 0
+    assert grep(render(raw), r"^searched [0-9.]+ s · [0-9]+ hits? · 2 files read · 4 skipped$"), render(raw)
+
+
+def timing_row(err, adapter="ocrimg", where="on disk"):
+    """RUNS, SECONDS, CACHE HITS, SKIPPED, ENGINE STARTS of one --timings row."""
+    m = re.search(r"(?m)^  image +%s +([0-9]+) +[0-9.]+ +([0-9]+) +([0-9]+) +([0-9]+) " % where, err)
+    assert m, err
+    return {"runs": int(m.group(1)), "hits": int(m.group(2)), "skipped": int(m.group(3)),
+            "starts": int(m.group(4))}
+
+
+def test_a_copy_of_a_file_is_not_read_again(tool, tmp_path):
+    """The content cache: the same bytes under another name, in another
+    folder or in a search of another folder cost no OCR. --no-cache leaves
+    it out, --refresh reads again, --clear-cache removes it."""
+    t = Tool(str(tmp_path / "copies"))
+    os.makedirs(os.path.join(t.fx, "a"))
+    shutil.copy(os.path.join(tool.fx, "photo.png"), os.path.join(t.fx, "a", "photo.png"))
+    r = t.search("--timings")
+    assert r.code == 0 and grep(r.err, "^timings: wall "), (r.out, r.err)
+    assert timing_row(r.err) == {"runs": 1, "hits": 0, "skipped": 0, "starts": 1}
+    text = os.path.join(t.cache, cache_tag(), "text")
+    assert len([f for _d, _s, files in os.walk(text) for f in files]) == 1
+    # a second folder with the same picture under another name: rga's cache
+    # (keyed on the path) does not know it, the content cache does
+    os.makedirs(os.path.join(t.fx, "b"))
+    shutil.copy(os.path.join(tool.fx, "photo.png"), os.path.join(t.fx, "b", "renamed.png"))
+    r = t.search("--timings")
+    assert r.code == 0 and grep(r.out, r"renamed\.png"), (r.out, r.err)
+    assert timing_row(r.err) == {"runs": 1, "hits": 1, "skipped": 0, "starts": 0}
+    r = t.search("--timings", "--no-cache")
+    assert r.code == 0 and grep(r.out, r"renamed\.png") and grep(r.out, r"photo\.png"), (r.out, r.err)
+    assert timing_row(r.err) == {"runs": 2, "hits": 0, "skipped": 0, "starts": 2}
+    r = t.search("--timings", "--refresh")
+    assert r.code == 0 and grep(r.out, r"renamed\.png"), (r.out, r.err)
+    assert timing_row(r.err) == {"runs": 2, "hits": 0, "skipped": 0, "starts": 2}
+    r = t.run("--cache-info")
+    assert r.code == 0, r.err
+    r = t.run("--clear-cache", "all")
+    assert r.code == 0 and not os.path.exists(text), (r.out, r.err)
 
 
 def test_rga_flags_the_search_sets_itself(tool, tmp_path):
@@ -502,7 +586,7 @@ def test_engine_failure_is_not_cached(tool, tmp_path):
     for name in ("photo.png", "bundle.zip"):
         shutil.copy(os.path.join(tool.fx, name), t.fx)
     with open(os.path.join(t.fx, "broken.pdf"), "w") as f:
-        f.write("this is not a pdf\n")
+        f.write("%PDF-1.4\nthis is not a pdf\n")
     cfg = spy_config()
     for a in cfg["custom_adapters"]:
         a["args"] = [os.path.join(HERE, "failing_engine_adapter.py") if x.endswith("spy_adapter.py") else x
@@ -516,7 +600,8 @@ def test_engine_failure_is_not_cached(tool, tmp_path):
     open(down, "w").close()
     member = "^" + re.escape(P) + r": adapter image failed on needle\.jpg: OSError: model fetch failed \(not cached"
     for run in range(2):                     # the second run does not answer from the cache
-        r = t.search(env=env)
+        # --verbose: a line per file; files with one failure share a line otherwise
+        r = t.search("--verbose", env=env)
         # not "no hit" (1): files went unread
         assert r.code == 2, (r.code, r.err)
         assert not grep(r.out, r"photo\.png|needle\.jpg"), r.out
