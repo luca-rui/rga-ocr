@@ -5,9 +5,11 @@ flags that are passed through to `rga` and `rg`, the output format, the
 profile, the cache, and the full list of limits. How the adapters work
 inside is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+- [Engines](#engines)
 - [Setup](#setup)
 - [Options](#options)
 - [Output](#output)
+- [Names](#names)
 - [Profile, paths and environment](#profile-paths-and-environment)
 - [The OCR cache](#the-ocr-cache)
 - [What the adapters do](#what-the-adapters-do)
@@ -15,6 +17,27 @@ inside is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 - [Using plain rga](#using-plain-rga)
 - [Performance](#performance)
 - [Limits](#limits)
+- [Licences of the rapidocr extra](#licences-of-the-rapidocr-extra)
+
+## Engines
+
+| platform | engines (in the order `auto` tries them) | tested in CI |
+|----------|-------------------------------------------|--------------|
+| macOS 13+ | `vision`, `rapidocr`, `tesseract` | vision, tesseract |
+| Linux | `rapidocr`, `tesseract` | rapidocr, tesseract |
+| Windows 10+ | `winocr`, `rapidocr`, `tesseract` | rapidocr, winocr |
+
+| engine | what it is | needs | languages |
+|--------|------------|-------|-----------|
+| `vision` | Apple Vision through PyObjC | `rga-ocr[vision]` | auto-detected; `lang` pins a list of BCP 47 tags |
+| `winocr` | Windows.Media.Ocr through PyWinRT | `rga-ocr[winocr]` and an OCR language pack (`Add-WindowsCapability -Online -Name "Language.OCR~~~de-DE~0.0.1.0"`, as administrator) | one language per run: the first of `lang` with a pack installed, else the user's profile languages |
+| `rapidocr` | PaddleOCR models on ONNX Runtime, pure pip | `rga-ocr[rapidocr]` | the bundled multilingual model covers Latin script, Chinese and Japanese with nothing to download; `lang` with a Cyrillic, Arabic, Devanagari, Korean, Thai, Greek, Tamil, Telugu or Georgian tag switches to that script's model (fetched on first use); one script per run |
+| `tesseract` | Tesseract 5 through tesserocr wheels | `rga-ocr[tesseract]` and the `.traineddata` files for `lang` (`rga-ocr setup --apply` fetches them from tessdata_fast and checks them) | BCP 47 tags for 59 languages (`de-DE`, `fr`), or the name of any tessdata_fast file (`frk`, `chi_sim_vert`); several at once; default `eng` |
+
+`rga-ocr --engines` shows which engines work on this machine, why one
+does not, and which `auto` picks. `--engine NAME`, the profile key
+`engine`, or `RGA_OCR_ENGINE` choose one explicitly. Results are cached
+per engine and language, so switching engines never serves stale text.
 
 ## Setup
 
@@ -185,6 +208,22 @@ terminal and `--json` is not given, so scripts never see them.
 console that is not UTF-8 the spinner and separators fall back to ASCII.
 There is no percentage: rg reports nothing per file, and the cache hides
 how much OCR work is left.
+
+## Names
+
+The name pass matches the last path segment of files and directories, so
+`rga-ocr contract` finds a directory called `Contracts` and everything
+whose own name contains the word, but not every file beneath that
+directory. A blank in the query matches a run of non-letter characters by
+default, so `rga-ocr "maintenance contract"` finds
+`Maintenance_Contract_2026.pdf` and `maintenance-contract.docx`. The
+`name_blank` setting (`nonletter`, `separators`, `strict`) and
+`name_blank_optional` (the run may be empty, so `boiler plant` also finds
+`boilerplant`) adjust this.
+
+Hidden files and files ignored by `.gitignore` are always searched.
+`.git`, `node_modules`, `.venv` and `__pycache__` directories are skipped
+in both passes unless you change `exclude` or pass `--no-exclude`.
 
 ## Profile, paths and environment
 
@@ -431,3 +470,14 @@ ripgrep-all's cache database:
   skips that file's content for the run (exit 0, the other hits are
   fine). If a hit is missing, rerun the search: the cache holds
   everything else.
+
+## Licences of the rapidocr extra
+
+What the `rapidocr` extra pulls in besides: numpy, shapely, omegaconf
+(BSD), pyclipper, PyYAML, tqdm (MIT; tqdm also MPL-2.0 on parts),
+requests, opencv-python-headless (Apache-2.0), certifi (MPL-2.0).
+The opencv-python-headless wheels bundle their own FFmpeg (LGPL); the
+macOS wheel's FFmpeg includes the GPL codecs x264 and x265 (checked on
+5.0.0.93; see its `LICENSE-3RD-PARTY.txt`). `rga-ocr` never calls FFmpeg,
+but if a GPL library in the process matters to you, use the `vision`,
+`winocr` or `tesseract` engine instead of `rapidocr`.

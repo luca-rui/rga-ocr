@@ -121,7 +121,10 @@ the machine. `rga-ocr --engines` shows which engines work here, why one
 does not, and which `auto` picks. Choose another with `--engine NAME`,
 and name the languages of your documents with `--lang de-DE,en-US`
 (BCP 47 tags). Results are cached per engine and language, so switching
-never serves stale text.
+never serves stale text. The
+[reference](https://github.com/luca-rui/rga-ocr/blob/main/docs/reference.md#engines)
+has the language tags each engine accepts and the order `auto` uses per
+platform.
 
 ## Usage
 
@@ -135,7 +138,7 @@ rga-ocr -s "ACME GmbH" .                        # case-sensitive
 rga-ocr -r 'invoice\s+\d{4}' ~/Scans            # regex
 rga-ocr --lang de-DE,en-US "Kesselanlage" ~/Docs
 rga-ocr --names-only contract ~/Docs            # names only; --no-names for contents only
-rga-ocr -g '*.pdf' -j 4 contract ~/Docs         # other flags go to rga and rg
+rga-ocr -g '*.pdf' -j 4 contract ~/Docs         # other flags go to rga and rg: contents of PDFs only, 4 files at once
 rga-ocr --json needle DIR | jq -r '.data.path.text // .path' | sort -u
 ```
 
@@ -232,7 +235,7 @@ the engines and the adapters and name what is missing.
 | A PDF with selectable text is not found, or the text shown is garbage | The PDF carries a bad text layer. `--force-ocr` reads every page with OCR as well. |
 | `adapter ... failed on FILE: ... (not cached, the next search reads the file again)`, exit 2 | The engine could not read that file in this run; the reason is in the line. Hits in other files are complete. Fix the cause and search again. |
 | `adapter ... failed on FILE: ...` without that note | The file itself cannot be read (damaged, password protected). It is skipped until it changes. |
-| `adapter ... failed on 12 files: ...` | The same failure in several files, shown once. `--verbose` prints a line per file. |
+| `adapter ... failed on 12 files: ... (first: FILE; --verbose lists them)` | The same failure in several files, shown once. `--verbose` prints a line per file. |
 | `Unknown adapter: "ocrpdf"` | Plain `rga`, or a config named with `--rga-config-file`, lacks the adapter entries. Run `rga-ocr setup --apply` (for another config: `rga-ocr --rga-config-file=F setup --apply`). |
 | Tesseract: language files missing | `rga-ocr setup --apply --engine tesseract --lang de,en` fetches them, or point `TESSDATA_PREFIX` at your own. |
 | `winocr` does not work | No OCR language pack is installed. `rga-ocr --engines` prints the `Add-WindowsCapability` command. |
