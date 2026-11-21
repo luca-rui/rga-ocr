@@ -69,6 +69,7 @@ tests/data/shot.heic        HEIC sample for platforms without an encoder
 tests/ptyrun.py             runs a command on a pseudo-terminal for the tty tests
 tools/check_licences.py     CI check: no GPL/AGPL dependency, every licence on the allow-list
 docs/design/glossary.md     the terms used in the code and in the README
+docs/reference.md           the user reference behind the README: setup, options, output, profile, cache, limits
 tools/check_tools.py        CI check: the tools are on PATH and rga's pandoc adapter extracts text
 tools/release_check.py      CI and release check: version, changelog, tag, green ci run on main
 tools/fetch_verified.py     CI: download a file and check its SHA-256
@@ -197,7 +198,7 @@ Decisions worth knowing before changing things:
 - `rga-ocr` creates ripgrep-all's cache database (same schema, version and
   application id as 0.10.10) before each run and holds it open until
   ripgrep-all exits, so the parallel `rga-preproc` processes neither create
-  the schema nor rebuild the WAL index at the same time (see Limits in the README).
+  the schema nor rebuild the WAL index at the same time (see Limits in `docs/reference.md`).
 - The adapters run as `python -I -X utf8 -m rga_ocr.adapter MODE` with the
   interpreter `rga-ocr` was installed with, so there is one place that
   knows which engine packages exist and no launcher script to keep in sync.
@@ -208,6 +209,6 @@ Decisions worth knowing before changing things:
 ## Style
 
 Plain Python, standard library where it suffices, no framework for the
-CLI. Keep the README and `docs/design/glossary.md` in step with
+CLI. Keep the README, `docs/reference.md` and `docs/design/glossary.md` in step with
 user-visible changes, and add a line to `CHANGELOG.md` under
 `[Unreleased]`.

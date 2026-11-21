@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The README is shorter and covers what is needed to install, run and
+  trust the tool. The detail moved to `docs/reference.md`: everything
+  `setup` does, the pass-through flags, the output format, the profile
+  and tuning variables, the cache, plain `rga` use and the full list of
+  limits.
+
 ## [0.2.6] - 2026-11-20
 
 ### Added
